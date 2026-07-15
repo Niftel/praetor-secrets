@@ -296,6 +296,23 @@ Request includes `expected_version`. Response is redacted metadata.
 Retirement is idempotent and prevents new run bindings. It does not immediately
 destroy cryptographic material that an active run or retention policy requires.
 
+Request:
+
+```json
+{
+  "expected_version": 3,
+  "actor": {
+    "user_id": "104",
+    "authorization_decision_id": "01J2EXAMPLE"
+  }
+}
+```
+
+The first successful retirement creates a new encrypted credential version with
+state `retired`. Repeating the request returns the current retired metadata and
+does not create another version. A version mismatch on an active credential
+returns `409 version_conflict`.
+
 Hard deletion is not part of the v1 online API. A separately reviewed retention
 worker may cryptographically erase eligible retired versions by deleting wrapped
 data keys after all retention and recovery constraints are satisfied.

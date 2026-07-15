@@ -145,6 +145,14 @@ func TestPostgresCredentialLifecycle(t *testing.T) {
 	if err != nil || renamed.Version != 3 {
 		t.Fatalf("rename: %+v %v", renamed, err)
 	}
+	retired, err := manager.RetireContext(ctx, RetireRequest{CredentialID: created.ID, OrganizationID: "org-5", ExpectedVersion: 3})
+	if err != nil || retired.Version != 4 || retired.State != StateRetired {
+		t.Fatalf("retire: %+v %v", retired, err)
+	}
+	replayed, err = secondManager.RetireContext(ctx, RetireRequest{CredentialID: created.ID, OrganizationID: "org-5", ExpectedVersion: 3})
+	if err != nil || replayed.Version != 4 || replayed.State != StateRetired {
+		t.Fatalf("retire replay: %+v %v", replayed, err)
+	}
 	var envelopeText string
 	if err := pool.QueryRow(ctx, "SELECT envelope::text FROM credential_versions WHERE credential_id = $1 AND version = 3", created.ID).Scan(&envelopeText); err != nil {
 		t.Fatal(err)
@@ -158,7 +166,7 @@ func TestPostgresCredentialLifecycle(t *testing.T) {
 		t.Fatal("database allowed immutable ownership change")
 	}
 	var versionCount int
-	if err := pool.QueryRow(ctx, "SELECT count(*) FROM credential_versions WHERE credential_id = $1", created.ID).Scan(&versionCount); err != nil || versionCount != 3 {
+	if err := pool.QueryRow(ctx, "SELECT count(*) FROM credential_versions WHERE credential_id = $1", created.ID).Scan(&versionCount); err != nil || versionCount != 4 {
 		t.Fatalf("version history count=%d err=%v", versionCount, err)
 	}
 }
