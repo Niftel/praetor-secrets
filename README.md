@@ -129,6 +129,15 @@ credential routes and should remain restricted to the cluster health-check
 network. Readiness is reported only while the API listener is running and the
 database responds.
 
+### Kubernetes deployment
+
+The repository includes a standalone Helm chart at
+[`charts/praetor-secrets`](charts/praetor-secrets/README.md). It requires
+pre-existing Kubernetes Secrets for the database URL, encryption/audit keys,
+server identity, workload CA, and audit-sink identity. The chart never accepts
+their contents as values and stages them as non-root-owned `0400` files in an
+in-memory volume before starting the service.
+
 ## Audit spool
 
 Every PostgreSQL security-state mutation requires an audit spool append in the

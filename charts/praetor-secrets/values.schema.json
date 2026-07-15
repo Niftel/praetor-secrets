@@ -1,0 +1,43 @@
+{
+  "$schema": "https://json-schema.org/draft-07/schema#",
+  "title": "Praetor Secrets Service chart values",
+  "type": "object",
+  "properties": {
+    "replicaCount": { "type": "integer", "minimum": 1 },
+    "trustDomain": { "type": "string" },
+    "service": {
+      "type": "object",
+      "properties": {
+        "port": { "type": "integer", "minimum": 1, "maximum": 65535 },
+        "healthPort": { "type": "integer", "minimum": 1, "maximum": 65535 }
+      }
+    },
+    "secrets": {
+      "type": "object",
+      "properties": {
+        "runtimeSecret": { "type": "string" },
+        "serverTLSSecret": { "type": "string" },
+        "auditSinkTLSSecret": { "type": "string" },
+        "previousKeyEnabled": { "type": "boolean" }
+      }
+    },
+    "auditSink": {
+      "type": "object",
+      "properties": {
+        "url": { "type": "string" },
+        "batchSize": { "type": "integer", "minimum": 1, "maximum": 1000 },
+        "pollInterval": { "type": "string" },
+        "requestTimeout": { "type": "string" }
+      }
+    },
+    "limits": {
+      "type": "object",
+      "properties": {
+        "databaseConnections": { "type": "integer", "minimum": 1, "maximum": 100 },
+        "networkConnections": { "type": "integer", "minimum": 1, "maximum": 10000 },
+        "pendingAuditEvents": { "type": "integer", "minimum": 1, "maximum": 10000000 },
+        "shutdownTimeout": { "type": "string" }
+      }
+    }
+  }
+}
