@@ -192,6 +192,133 @@ func TestPostgresConcurrentVersionCheck(t *testing.T) {
 	}
 }
 
+func TestPostgresRunScopedResolution(t *testing.T) {
+	pool := postgresTestPool(t)
+	ctx := context.Background()
+	if err := ApplyPostgresMigrations(ctx, pool); err != nil {
+		t.Fatal(err)
+	}
+	manager := postgresTestManager(t, pool)
+	manager.injector = testInjector{}
+	now := manager.now()
+	created, err := manager.CreateContext(ctx, validCreate())
+	if err != nil {
+		t.Fatal(err)
+	}
+	registration := testBinding(now, created.ID)
+	binding, err := manager.RegisterBinding(ctx, schedulerIdentity(), registration)
+	if err != nil {
+		t.Fatal(err)
+	}
+	replayed, err := manager.RegisterBinding(ctx, schedulerIdentity(), registration)
+	if err != nil || replayed.RunID != binding.RunID {
+		t.Fatalf("registration replay: %+v %v", replayed, err)
+	}
+	if _, err := manager.ReplaceInputsContext(ctx, ReplaceInputsRequest{
+		CredentialID: created.ID, OrganizationID: "org-5", ExpectedVersion: 1,
+		Inputs: map[string]string{"username": "new-user", "password": "new-secret"},
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	request := ResolveRequest{
+		RunID: binding.RunID, AttemptID: "31024db7-0db8-446a-b049-dd9d172cde94", RequestedAt: now,
+	}
+	resolved, err := manager.Resolve(ctx, executorIdentity("worker-7"), request)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if resolved.Environment["ANSIBLE_REMOTE_USER"] != "automation" || resolved.Files[0].Content != "very-secret-value" {
+		t.Fatalf("did not resolve snapshot: %+v", resolved)
+	}
+	if _, err := manager.Resolve(ctx, executorIdentity("worker-7"), request); err != nil {
+		t.Fatalf("retry: %v", err)
+	}
+	if _, err := manager.Resolve(ctx, executorIdentity("other"), request); !errors.Is(err, ErrBindingNotActive) {
+		t.Fatalf("wrong executor: %v", err)
+	}
+
+	second := request
+	second.AttemptID = "41024db7-0db8-446a-b049-dd9d172cde95"
+	third := request
+	third.AttemptID = "51024db7-0db8-446a-b049-dd9d172cde96"
+	results := make(chan error, 2)
+	var wait sync.WaitGroup
+	for _, attempt := range []ResolveRequest{second, third} {
+		wait.Add(1)
+		go func(attempt ResolveRequest) {
+			defer wait.Done()
+			_, err := manager.Resolve(ctx, executorIdentity("worker-7"), attempt)
+			results <- err
+		}(attempt)
+	}
+	wait.Wait()
+	close(results)
+	winners, exhausted := 0, 0
+	for err := range results {
+		if err == nil {
+			winners++
+		} else if errors.Is(err, ErrBindingNotActive) {
+			exhausted++
+		} else {
+			t.Fatalf("concurrent resolution: %v", err)
+		}
+	}
+	if winners != 1 || exhausted != 1 {
+		t.Fatalf("winners=%d exhausted=%d", winners, exhausted)
+	}
+	inspected, err := manager.InspectBinding(ctx, schedulerIdentity(), binding.RunID)
+	if err != nil || inspected.ResolutionCount != 2 || inspected.State != BindingExhausted {
+		t.Fatalf("binding after resolution: %+v %v", inspected, err)
+	}
+	var attemptCount int
+	if err := pool.QueryRow(ctx, "SELECT count(*) FROM resolution_attempts WHERE run_id = $1", binding.RunID).Scan(&attemptCount); err != nil || attemptCount != 2 {
+		t.Fatalf("attempt count=%d err=%v", attemptCount, err)
+	}
+	var plaintextColumns int
+	if err := pool.QueryRow(ctx, `SELECT count(*) FROM information_schema.columns
+        WHERE table_schema = current_schema() AND table_name IN ('run_bindings', 'resolution_attempts')
+          AND column_name IN ('plaintext', 'inputs', 'secret', 'response')`).Scan(&plaintextColumns); err != nil || plaintextColumns != 0 {
+		t.Fatalf("plaintext columns=%d err=%v", plaintextColumns, err)
+	}
+}
+
+func TestPostgresCancellationAndBindingConflicts(t *testing.T) {
+	pool := postgresTestPool(t)
+	ctx := context.Background()
+	if err := ApplyPostgresMigrations(ctx, pool); err != nil {
+		t.Fatal(err)
+	}
+	manager := postgresTestManager(t, pool)
+	manager.injector = testInjector{}
+	now := manager.now()
+	created, _ := manager.CreateContext(ctx, validCreate())
+	registration := testBinding(now, created.ID)
+	binding, err := manager.RegisterBinding(ctx, schedulerIdentity(), registration)
+	if err != nil {
+		t.Fatal(err)
+	}
+	registration.ExecutorIdentity = "praetor-executor:other"
+	if _, err := manager.RegisterBinding(ctx, schedulerIdentity(), registration); !errors.Is(err, ErrBindingConflict) {
+		t.Fatalf("binding conflict: %v", err)
+	}
+	canceled, err := manager.CancelBinding(ctx, schedulerIdentity(), binding.RunID, "dispatch_canceled")
+	if err != nil || canceled.State != BindingCanceled {
+		t.Fatalf("cancel: %+v %v", canceled, err)
+	}
+	again, err := manager.CancelBinding(ctx, schedulerIdentity(), binding.RunID, "different_reason")
+	if err != nil || again.CancelReason != "dispatch_canceled" {
+		t.Fatalf("cancel was not idempotent: %+v %v", again, err)
+	}
+	request := ResolveRequest{RunID: binding.RunID, AttemptID: "31024db7-0db8-446a-b049-dd9d172cde94", RequestedAt: now}
+	if _, err := manager.Resolve(ctx, executorIdentity("worker-7"), request); !errors.Is(err, ErrBindingNotActive) {
+		t.Fatalf("canceled resolution: %v", err)
+	}
+	if _, err := pool.Exec(ctx, "UPDATE run_bindings SET credential_id = $1 WHERE run_id = $2", "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa", binding.RunID); err == nil {
+		t.Fatal("database allowed binding identity mutation")
+	}
+}
+
 func TestPostgresHelpersFailClosed(t *testing.T) {
 	if _, err := NewPostgresManager(masterkey.Set{}, testSchemas{}, nil); !errors.Is(err, ErrInvalidInput) {
 		t.Fatalf("nil pool manager: %v", err)

@@ -11,6 +11,7 @@ import (
 	"errors"
 	"sort"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/Niftel/praetor-secrets/envelope"
@@ -91,19 +92,27 @@ type idempotencyEntry struct {
 // Manager provides encrypted lifecycle semantics over either the development
 // memory backend or transactional PostgreSQL storage.
 type Manager struct {
-	keys    masterkey.Set
-	schemas SchemaRegistry
-	backend backend
-	now     func() time.Time
-	newID   func() (string, error)
+	keys            masterkey.Set
+	schemas         SchemaRegistry
+	injector        InjectorRegistry
+	configurationMu sync.RWMutex
+	policy          ResolutionPolicy
+	backend         backend
+	now             func() time.Time
+	newID           func() (string, error)
 }
 
-func NewManager(keys masterkey.Set, schemas SchemaRegistry) (*Manager, error) {
-	if keys.Current.ID() == "" || schemas == nil {
+func NewManager(keys masterkey.Set, schemas SchemaRegistry, injectors ...InjectorRegistry) (*Manager, error) {
+	if keys.Current.ID() == "" || schemas == nil || len(injectors) > 1 {
 		return nil, ErrInvalidInput
 	}
+	var injector InjectorRegistry
+	if len(injectors) == 1 {
+		injector = injectors[0]
+	}
 	return &Manager{
-		keys: keys, schemas: schemas,
+		keys: keys, schemas: schemas, injector: injector,
+		policy:  DefaultResolutionPolicy(),
 		backend: newMemoryBackend(),
 		now:     func() time.Time { return time.Now().UTC() },
 		newID:   newUUID,
