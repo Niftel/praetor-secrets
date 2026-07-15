@@ -154,8 +154,10 @@ directory, and every output directory contains a deny-all `.gitignore`.
 The generator refuses to overwrite an existing directory. These development
 CAs must never be used outside a disposable local environment.
 The generated `clients` directory contains API, scheduler, executor, operator,
-and auditor certificates for local mTLS integration tests; it is not applied as
-a Kubernetes Secret by the helper.
+and auditor certificates for local mTLS integration tests. It also includes the
+scheduler claim-listener certificate, the executor client CA, and the executor's
+separate Secrets server CA key expected by the Praetor chart. The `clients`
+directory is not applied as a Kubernetes Secret by the helper.
 
 ## Audit spool
 

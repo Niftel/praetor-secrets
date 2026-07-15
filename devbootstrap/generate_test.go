@@ -28,7 +28,8 @@ func TestGenerateCreatesRestrictedInteroperableBootstrap(t *testing.T) {
 		"praetor-secrets-audit-client/tls.crt", "praetor-secrets-audit-client/tls.key", "praetor-secrets-audit-client/ca.crt",
 		"praetor-audit-runtime/database-url", "praetor-audit-server/tls.crt", "praetor-audit-server/tls.key", "praetor-audit-server/ca.crt",
 		"clients/praetor-api/tls.crt", "clients/praetor-api/tls.key", "clients/praetor-api/ca.crt",
-		"clients/praetor-scheduler/tls.crt", "clients/praetor-executor/tls.crt",
+		"clients/praetor-scheduler/tls.crt", "clients/praetor-scheduler/claim.crt", "clients/praetor-scheduler/claim.key", "clients/praetor-scheduler/executor-ca.crt",
+		"clients/praetor-executor/tls.crt", "clients/praetor-executor/secrets-ca.crt",
 		"clients/praetor-secrets-operator/tls.crt", "clients/praetor-secrets-auditor/tls.crt",
 		"kubectl-secrets.sh", ".gitignore",
 	}
@@ -55,6 +56,19 @@ func TestGenerateCreatesRestrictedInteroperableBootstrap(t *testing.T) {
 	executorClient := readCertificate(t, filepath.Join(output, "clients/praetor-executor/tls.crt"))
 	if len(executorClient.URIs) != 1 || executorClient.URIs[0].String() != "spiffe://praetor.local/workload/praetor-executor/development-1" {
 		t.Fatalf("executor identity=%v", executorClient.URIs)
+	}
+	claimServer := readCertificate(t, filepath.Join(output, "clients/praetor-scheduler/claim.crt"))
+	if !slices.Contains(claimServer.DNSNames, "praetor-scheduler.security.svc") || !slices.Contains(claimServer.ExtKeyUsage, x509.ExtKeyUsageServerAuth) {
+		t.Fatalf("claim server DNS names=%v usages=%v", claimServer.DNSNames, claimServer.ExtKeyUsage)
+	}
+	workloadRoots := x509.NewCertPool()
+	workloadCA, _ := os.ReadFile(filepath.Join(output, "clients/praetor-scheduler/executor-ca.crt"))
+	workloadRoots.AppendCertsFromPEM(workloadCA)
+	if _, err := executorClient.Verify(x509.VerifyOptions{Roots: workloadRoots, KeyUsages: []x509.ExtKeyUsage{x509.ExtKeyUsageClientAuth}, CurrentTime: now}); err != nil {
+		t.Fatalf("executor chain: %v", err)
+	}
+	if _, err := claimServer.Verify(x509.VerifyOptions{Roots: workloadRoots, DNSName: "praetor-scheduler.security.svc", KeyUsages: []x509.ExtKeyUsage{x509.ExtKeyUsageServerAuth}, CurrentTime: now}); err != nil {
+		t.Fatalf("claim server chain: %v", err)
 	}
 	sink := readCertificate(t, filepath.Join(output, "praetor-audit-server/tls.crt"))
 	for _, expected := range []string{"praetor-audit-sink", "praetor-audit-sink.security.svc", "praetor-audit-sink.security.svc.cluster.local"} {
