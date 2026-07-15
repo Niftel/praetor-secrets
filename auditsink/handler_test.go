@@ -167,7 +167,7 @@ func TestHandlerMapsStoreFailuresWithoutValues(t *testing.T) {
 
 func TestHandlerFailsClosedForUnknownStoreResult(t *testing.T) {
 	body, record := encodedAuditRecord(t)
-	appender := &fakeAppender{result: AppendResult(99)}
+	appender := &fakeAppender{result: AppendResult("unknown")}
 	handler, _ := NewHandler(appender, "praetor.local")
 	request := authenticatedAuditRequest(t, body, "spiffe://praetor.local/workload/praetor-secrets")
 	request.Header.Set("Idempotency-Key", key(record))
