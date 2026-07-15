@@ -12,8 +12,9 @@ Development is tracked in the private
 ## Current phase
 
 Core service implementation is underway. The envelope format, strict
-file-backed master-key loader, and redacted credential lifecycle domain are
-implemented; durable storage, transport, and run-scoped resolution follow.
+file-backed master-key loader, redacted credential lifecycle, and transactional
+PostgreSQL persistence are implemented; transport and run-scoped resolution
+follow.
 
 - [Threat model](docs/threat-model.md)
 - [Service API and trust-boundary specification](docs/service-api.md)
@@ -38,6 +39,19 @@ complete schema-validated input payload as a new credential version. Metadata
 updates also create a new independently encrypted version so a future run
 binding can snapshot one coherent version. Organization ownership and credential
 type are immutable, and stale concurrent writes fail without partial changes.
+
+### PostgreSQL persistence
+
+Credential metadata, versioned envelope records, and idempotency responses are
+stored transactionally. The schema contains no plaintext input column, enforces
+immutable credential ownership and type with a database trigger, and revokes
+table access from `PUBLIC`. Conditional version updates provide cross-process
+optimistic concurrency; transaction-scoped advisory locks serialize reuse of an
+organization's idempotency key.
+
+`ApplyPostgresMigrations` must complete before the service accepts traffic. The
+application database role should own only this service's database objects and
+must not be shared with Praetor API, scheduler, or executor workloads.
 
 ## Core invariants
 

@@ -57,6 +57,15 @@ func validCreate() CreateRequest {
 	}
 }
 
+func testMemory(t *testing.T, manager *Manager) *memoryBackend {
+	t.Helper()
+	backend, ok := manager.backend.(*memoryBackend)
+	if !ok {
+		t.Fatal("manager does not use memory backend")
+	}
+	return backend
+}
+
 func TestCreateAndGetExposeOnlyRedactedMetadata(t *testing.T) {
 	manager := newTestManager(t)
 	metadata, err := manager.Create(validCreate())
@@ -74,7 +83,7 @@ func TestCreateAndGetExposeOnlyRedactedMetadata(t *testing.T) {
 	if bytes.Contains(encoded, []byte("very-secret-value")) || bytes.Contains(encoded, []byte("automation")) {
 		t.Fatalf("metadata contains credential input: %s", encoded)
 	}
-	storedJSON, err := json.Marshal(manager.credentials[metadata.ID])
+	storedJSON, err := json.Marshal(testMemory(t, manager).credentials[metadata.ID])
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -132,7 +141,7 @@ func TestReplaceInputsCreatesVersionAndConflictIsAtomic(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if updated.Version != 2 || len(manager.credentials[created.ID].records) != 2 {
+	if updated.Version != 2 || len(testMemory(t, manager).credentials[created.ID].records) != 2 {
 		t.Fatalf("replacement not versioned: %+v", updated)
 	}
 	if _, err := manager.ReplaceInputs(ReplaceInputsRequest{
@@ -142,7 +151,7 @@ func TestReplaceInputsCreatesVersionAndConflictIsAtomic(t *testing.T) {
 		t.Fatalf("stale replacement: %v", err)
 	}
 	current, _ := manager.Get("org-5", created.ID)
-	if current.Version != 2 || len(manager.credentials[created.ID].records) != 2 {
+	if current.Version != 2 || len(testMemory(t, manager).credentials[created.ID].records) != 2 {
 		t.Fatalf("conflict partially changed state: %+v", current)
 	}
 }
@@ -153,7 +162,7 @@ func TestMetadataUpdateReencryptsAsNewCredentialVersion(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	oldRecord := manager.credentials[created.ID].records[1]
+	oldRecord := testMemory(t, manager).credentials[created.ID].records[1]
 	updated, err := manager.UpdateMetadata(UpdateMetadataRequest{
 		CredentialID: created.ID, OrganizationID: "org-5", ExpectedVersion: 1, Name: "renamed-machine",
 	})
@@ -163,7 +172,7 @@ func TestMetadataUpdateReencryptsAsNewCredentialVersion(t *testing.T) {
 	if updated.Name != "renamed-machine" || updated.Version != 2 {
 		t.Fatalf("unexpected metadata: %+v", updated)
 	}
-	newRecord := manager.credentials[created.ID].records[2]
+	newRecord := testMemory(t, manager).credentials[created.ID].records[2]
 	if newRecord.RecordID == oldRecord.RecordID || newRecord.MasterKeyID != manager.keys.Current.ID() {
 		t.Fatal("metadata update did not create an independent encrypted version")
 	}
@@ -179,7 +188,7 @@ func TestMetadataUpdateReencryptsAsNewCredentialVersion(t *testing.T) {
 	same, err := manager.UpdateMetadata(UpdateMetadataRequest{
 		CredentialID: created.ID, OrganizationID: "org-5", ExpectedVersion: 2, Name: "renamed-machine",
 	})
-	if err != nil || same.Version != 2 || len(manager.credentials[created.ID].records) != 2 {
+	if err != nil || same.Version != 2 || len(testMemory(t, manager).credentials[created.ID].records) != 2 {
 		t.Fatal("no-op metadata update created a version")
 	}
 }
@@ -199,7 +208,7 @@ func TestCreateIdempotency(t *testing.T) {
 	if _, err := manager.Create(conflict); !errors.Is(err, ErrIdempotencyConflict) {
 		t.Fatalf("idempotency conflict: %v", err)
 	}
-	if len(manager.credentials) != 1 {
+	if len(testMemory(t, manager).credentials) != 1 {
 		t.Fatal("idempotency conflict created a credential")
 	}
 }
@@ -247,7 +256,7 @@ func TestValidationErrorsDoNotLeakInputs(t *testing.T) {
 	if !errors.Is(err, ErrInvalidInput) || bytes.Contains([]byte(err.Error()), []byte("very-secret-value")) {
 		t.Fatalf("unsafe validation error: %v", err)
 	}
-	if len(manager.credentials) != 0 {
+	if len(testMemory(t, manager).credentials) != 0 {
 		t.Fatal("invalid input changed state")
 	}
 }

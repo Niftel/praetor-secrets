@@ -3,6 +3,7 @@
 package credential
 
 import (
+	"context"
 	"crypto/rand"
 	"crypto/sha256"
 	"encoding/hex"
@@ -10,7 +11,6 @@ import (
 	"errors"
 	"sort"
 	"strings"
-	"sync"
 	"time"
 
 	"github.com/Niftel/praetor-secrets/envelope"
@@ -83,26 +83,19 @@ type SchemaRegistry interface {
 	Validate(credentialType string, schemaVersion uint32, inputs map[string]string) ([]string, error)
 }
 
-type storedCredential struct {
-	metadata Metadata
-	records  map[uint64]envelope.Record
-}
-
 type idempotencyEntry struct {
 	digest   [sha256.Size]byte
 	response Metadata
 }
 
-// Manager provides atomic in-process lifecycle semantics. Durable persistence
-// can replace its storage boundary without changing the redacted API model.
+// Manager provides encrypted lifecycle semantics over either the development
+// memory backend or transactional PostgreSQL storage.
 type Manager struct {
-	mu          sync.RWMutex
-	keys        masterkey.Set
-	schemas     SchemaRegistry
-	credentials map[string]*storedCredential
-	idempotency map[string]idempotencyEntry
-	now         func() time.Time
-	newID       func() (string, error)
+	keys    masterkey.Set
+	schemas SchemaRegistry
+	backend backend
+	now     func() time.Time
+	newID   func() (string, error)
 }
 
 func NewManager(keys masterkey.Set, schemas SchemaRegistry) (*Manager, error) {
@@ -111,14 +104,17 @@ func NewManager(keys masterkey.Set, schemas SchemaRegistry) (*Manager, error) {
 	}
 	return &Manager{
 		keys: keys, schemas: schemas,
-		credentials: make(map[string]*storedCredential),
-		idempotency: make(map[string]idempotencyEntry),
-		now:         func() time.Time { return time.Now().UTC() },
-		newID:       newUUID,
+		backend: newMemoryBackend(),
+		now:     func() time.Time { return time.Now().UTC() },
+		newID:   newUUID,
 	}, nil
 }
 
 func (m *Manager) Create(request CreateRequest) (Metadata, error) {
+	return m.CreateContext(context.Background(), request)
+}
+
+func (m *Manager) CreateContext(ctx context.Context, request CreateRequest) (Metadata, error) {
 	if err := validateCreate(request); err != nil {
 		return Metadata{}, err
 	}
@@ -131,15 +127,6 @@ func (m *Manager) Create(request CreateRequest) (Metadata, error) {
 		return Metadata{}, ErrInvalidInput
 	}
 	idempotencyID := request.OrganizationID + "\x00" + request.IdempotencyKey
-
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	if existing, ok := m.idempotency[idempotencyID]; ok {
-		if existing.digest != digest {
-			return Metadata{}, ErrIdempotencyConflict
-		}
-		return cloneMetadata(existing.response), nil
-	}
 
 	id, err := m.newID()
 	if err != nil {
@@ -156,43 +143,42 @@ func (m *Manager) Create(request CreateRequest) (Metadata, error) {
 	if err != nil {
 		return Metadata{}, err
 	}
-	m.credentials[id] = &storedCredential{metadata: metadata, records: map[uint64]envelope.Record{1: record}}
-	m.idempotency[idempotencyID] = idempotencyEntry{digest: digest, response: cloneMetadata(metadata)}
-	return cloneMetadata(metadata), nil
+	return m.backend.Create(ctx, idempotencyID, digest, metadata, record)
 }
 
 // Get returns redacted metadata only and requires the immutable organization
 // owner. Cross-organization lookups are indistinguishable from missing records.
 func (m *Manager) Get(organizationID, credentialID string) (Metadata, error) {
-	m.mu.RLock()
-	defer m.mu.RUnlock()
-	stored, ok := m.credentials[credentialID]
-	if !ok || stored.metadata.OrganizationID != organizationID {
-		return Metadata{}, ErrNotFound
-	}
-	return cloneMetadata(stored.metadata), nil
+	return m.GetContext(context.Background(), organizationID, credentialID)
+}
+
+func (m *Manager) GetContext(ctx context.Context, organizationID, credentialID string) (Metadata, error) {
+	metadata, _, err := m.backend.Get(ctx, organizationID, credentialID)
+	return metadata, err
 }
 
 func (m *Manager) ReplaceInputs(request ReplaceInputsRequest) (Metadata, error) {
+	return m.ReplaceInputsContext(context.Background(), request)
+}
+
+func (m *Manager) ReplaceInputsContext(ctx context.Context, request ReplaceInputsRequest) (Metadata, error) {
 	if request.CredentialID == "" || request.OrganizationID == "" || request.ExpectedVersion == 0 {
 		return Metadata{}, ErrInvalidInput
 	}
 
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	stored, ok := m.credentials[request.CredentialID]
-	if !ok || stored.metadata.OrganizationID != request.OrganizationID {
-		return Metadata{}, ErrNotFound
+	current, _, err := m.backend.Get(ctx, request.OrganizationID, request.CredentialID)
+	if err != nil {
+		return Metadata{}, err
 	}
-	if stored.metadata.Version != request.ExpectedVersion {
+	if current.Version != request.ExpectedVersion {
 		return Metadata{}, ErrVersionConflict
 	}
-	secretFields, err := m.validateSchema(stored.metadata.CredentialType, stored.metadata.SchemaVersion, request.Inputs)
+	secretFields, err := m.validateSchema(current.CredentialType, current.SchemaVersion, request.Inputs)
 	if err != nil {
 		return Metadata{}, err
 	}
 
-	next := cloneMetadata(stored.metadata)
+	next := cloneMetadata(current)
 	next.Version++
 	next.SecretFields = secretFields
 	next.UpdatedAt = m.now()
@@ -200,31 +186,30 @@ func (m *Manager) ReplaceInputs(request ReplaceInputsRequest) (Metadata, error) 
 	if err != nil {
 		return Metadata{}, err
 	}
-	stored.records[next.Version] = record
-	stored.metadata = next
-	return cloneMetadata(next), nil
+	return m.backend.Update(ctx, request.OrganizationID, request.CredentialID, request.ExpectedVersion, next, record)
 }
 
 func (m *Manager) UpdateMetadata(request UpdateMetadataRequest) (Metadata, error) {
+	return m.UpdateMetadataContext(context.Background(), request)
+}
+
+func (m *Manager) UpdateMetadataContext(ctx context.Context, request UpdateMetadataRequest) (Metadata, error) {
 	if request.CredentialID == "" || request.OrganizationID == "" || request.ExpectedVersion == 0 || !validName(request.Name) {
 		return Metadata{}, ErrInvalidInput
 	}
 
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	stored, ok := m.credentials[request.CredentialID]
-	if !ok || stored.metadata.OrganizationID != request.OrganizationID {
-		return Metadata{}, ErrNotFound
+	current, currentRecord, err := m.backend.Get(ctx, request.OrganizationID, request.CredentialID)
+	if err != nil {
+		return Metadata{}, err
 	}
-	if stored.metadata.Version != request.ExpectedVersion {
+	if current.Version != request.ExpectedVersion {
 		return Metadata{}, ErrVersionConflict
 	}
-	if stored.metadata.Name == request.Name {
-		return cloneMetadata(stored.metadata), nil
+	if current.Name == request.Name {
+		return cloneMetadata(current), nil
 	}
 
-	currentRecord := stored.records[stored.metadata.Version]
-	plaintext, err := envelope.Decrypt(currentRecord, envelopeContext(stored.metadata), m.keys.Keyring())
+	plaintext, err := envelope.Decrypt(currentRecord, envelopeContext(current), m.keys.Keyring())
 	if err != nil {
 		return Metadata{}, ErrEncryption
 	}
@@ -234,7 +219,7 @@ func (m *Manager) UpdateMetadata(request UpdateMetadataRequest) (Metadata, error
 		return Metadata{}, ErrEncryption
 	}
 
-	next := cloneMetadata(stored.metadata)
+	next := cloneMetadata(current)
 	next.Name = request.Name
 	next.Version++
 	next.UpdatedAt = m.now()
@@ -243,9 +228,7 @@ func (m *Manager) UpdateMetadata(request UpdateMetadataRequest) (Metadata, error
 	if err != nil {
 		return Metadata{}, err
 	}
-	stored.records[next.Version] = record
-	stored.metadata = next
-	return cloneMetadata(next), nil
+	return m.backend.Update(ctx, request.OrganizationID, request.CredentialID, request.ExpectedVersion, next, record)
 }
 
 func (m *Manager) encrypt(metadata Metadata, inputs map[string]string) (envelope.Record, error) {
