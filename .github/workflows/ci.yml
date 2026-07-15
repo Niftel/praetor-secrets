@@ -18,6 +18,20 @@ jobs:
     name: test
     runs-on: ubuntu-latest
     timeout-minutes: 15
+    services:
+      postgres:
+        image: postgres:17.10-alpine3.23@sha256:8189a1f6e40904781fc9e2612687877791d21679866db58b1de996b31fc312e4
+        env:
+          POSTGRES_USER: praetor_test
+          POSTGRES_PASSWORD: praetor_test
+          POSTGRES_DB: praetor_secrets_test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U praetor_test -d praetor_secrets_test"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
 
@@ -33,6 +47,8 @@ jobs:
         run: go vet ./...
 
       - name: Test with race detector and coverage
+        env:
+          PRAETOR_SECRETS_TEST_DATABASE_URL: postgres://praetor_test:praetor_test@127.0.0.1:5432/praetor_secrets_test?sslmode=disable
         run: go test -race -covermode=atomic -coverprofile=coverage.out ./...
 
       - name: Require at least 80% statement coverage
