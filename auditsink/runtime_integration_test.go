@@ -1,6 +1,7 @@
-package app
+package auditsink
 
 import (
+	"bytes"
 	"context"
 	"crypto/ecdsa"
 	"crypto/elliptic"
@@ -8,6 +9,7 @@ import (
 	"crypto/tls"
 	"crypto/x509"
 	"crypto/x509/pkix"
+	"encoding/json"
 	"encoding/pem"
 	"fmt"
 	"math/big"
@@ -21,7 +23,7 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 )
 
-func TestRuntimeBootsWithDatabaseAndMTLS(t *testing.T) {
+func TestAuditSinkRuntimeBootsAndAppendsOverMTLS(t *testing.T) {
 	databaseURL := os.Getenv("PRAETOR_SECRETS_TEST_DATABASE_URL")
 	if databaseURL == "" {
 		t.Skip("PRAETOR_SECRETS_TEST_DATABASE_URL is not set")
@@ -32,7 +34,7 @@ func TestRuntimeBootsWithDatabaseAndMTLS(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer admin.Close()
-	schema := fmt.Sprintf("praetor_app_%d", time.Now().UnixNano())
+	schema := fmt.Sprintf("audit_sink_runtime_%d", time.Now().UnixNano())
 	if _, err := admin.Exec(ctx, `CREATE SCHEMA "`+schema+`"`); err != nil {
 		t.Fatal(err)
 	}
@@ -45,20 +47,13 @@ func TestRuntimeBootsWithDatabaseAndMTLS(t *testing.T) {
 	query.Set("search_path", schema)
 	databaseURI.RawQuery = query.Encode()
 	databaseURL = databaseURI.String()
-
 	directory := t.TempDir()
-	databaseFile := writeFile(t, directory+"/database-url", []byte(databaseURL), 0o400)
-	masterFile := writeFile(t, directory+"/master-key", make([]byte, 32), 0o400)
-	auditFile := writeFile(t, directory+"/audit-key", make([]byte, 32), 0o400)
-	caFile, serverCertFile, serverKeyFile, clientCertificate, roots := testCertificates(t, directory)
+	caFile, certificateFile, keyFile, clientCertificate, roots := sinkTestCertificates(t, directory)
 	config := Config{
 		ListenAddress: "127.0.0.1:0", HealthListenAddress: "127.0.0.1:0", TrustDomain: "praetor.local",
-		DatabaseURLFile: databaseFile, MasterKeyFile: masterFile, AuditKeyFile: auditFile, TLSCertificateFile: serverCertFile,
-		TLSPrivateKeyFile: serverKeyFile, ClientCAFile: caFile, ShutdownTimeout: 2 * time.Second,
-		AuditSinkURL: "https://audit.invalid/events", AuditSinkCAFile: caFile,
-		AuditSinkCertificateFile: serverCertFile, AuditSinkPrivateKeyFile: serverKeyFile,
-		MaxDatabaseConns: 2, MaxNetworkConns: 4, MaxPendingAuditEvents: 100,
-		AuditDeliveryBatchSize: 10, AuditDeliveryPollInterval: time.Second, AuditDeliveryRequestTimeout: time.Second,
+		DatabaseURLFile:    writeSinkFile(t, directory+"/database-url", []byte(databaseURL), 0o400),
+		TLSCertificateFile: certificateFile, TLSPrivateKeyFile: keyFile, ClientCAFile: caFile,
+		ShutdownTimeout: 2 * time.Second, MaxDatabaseConns: 2, MaxNetworkConns: 4,
 	}
 	runtime, err := Build(ctx, config)
 	if err != nil {
@@ -82,50 +77,45 @@ func TestRuntimeBootsWithDatabaseAndMTLS(t *testing.T) {
 	response, err := http.Get("http://" + healthAddress + "/readyz")
 	if err != nil || response.StatusCode != http.StatusOK {
 		cancel()
-		t.Fatalf("readiness status=%v err=%v", responseStatus(response), err)
+		t.Fatalf("readiness response=%v err=%v", response, err)
 	}
-	response.Body.Close()
+	_ = response.Body.Close()
+	record := validRecord(1)
+	body, _ := json.Marshal(record)
+	request, _ := http.NewRequest(http.MethodPost, "https://"+mainAddress+IngestionPath, bytes.NewReader(body))
+	request.Header.Set("Content-Type", "application/json")
+	request.Header.Set("Idempotency-Key", key(record))
 	client := &http.Client{Transport: &http.Transport{TLSClientConfig: &tls.Config{
 		MinVersion: tls.VersionTLS13, RootCAs: roots, Certificates: []tls.Certificate{clientCertificate}, ServerName: "localhost",
 	}}}
-	response, err = client.Get("https://" + mainAddress + "/internal/v1/run-bindings/32b9fc25-fd71-47e6-b0e8-45db87df9f65")
-	if err != nil || response.StatusCode != http.StatusNotFound {
+	response, err = client.Do(request)
+	if err != nil || response.StatusCode != http.StatusCreated {
 		cancel()
-		t.Fatalf("mTLS status=%v err=%v", responseStatus(response), err)
+		t.Fatalf("append response=%v err=%v", response, err)
 	}
-	response.Body.Close()
+	_ = response.Body.Close()
+	var count int
+	if err := admin.QueryRow(ctx, `SELECT count(*) FROM "`+schema+`".remote_audit_records`).Scan(&count); err != nil || count != 1 {
+		cancel()
+		t.Fatalf("stored count=%d err=%v", count, err)
+	}
 	cancel()
 	if err := <-done; err != nil {
 		t.Fatalf("shutdown: %v", err)
 	}
 }
 
-func responseStatus(response *http.Response) any {
-	if response == nil {
-		return nil
-	}
-	return response.StatusCode
-}
-
-func writeFile(t *testing.T, path string, value []byte, mode os.FileMode) string {
-	t.Helper()
-	if err := os.WriteFile(path, value, mode); err != nil {
-		t.Fatal(err)
-	}
-	return path
-}
-
-func testCertificates(t *testing.T, directory string) (string, string, string, tls.Certificate, *x509.CertPool) {
+func sinkTestCertificates(t *testing.T, directory string) (string, string, string, tls.Certificate, *x509.CertPool) {
 	t.Helper()
 	now := time.Now()
 	caKey, _ := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
-	caTemplate := &x509.Certificate{SerialNumber: big.NewInt(1), Subject: pkix.Name{CommonName: "test-ca"}, NotBefore: now.Add(-time.Minute), NotAfter: now.Add(time.Hour), IsCA: true, BasicConstraintsValid: true, KeyUsage: x509.KeyUsageCertSign}
+	caTemplate := &x509.Certificate{SerialNumber: big.NewInt(1), Subject: pkix.Name{CommonName: "audit-test-ca"}, NotBefore: now.Add(-time.Minute), NotAfter: now.Add(time.Hour), IsCA: true, BasicConstraintsValid: true, KeyUsage: x509.KeyUsageCertSign}
 	caDER, err := x509.CreateCertificate(rand.Reader, caTemplate, caTemplate, &caKey.PublicKey, caKey)
 	if err != nil {
 		t.Fatal(err)
 	}
 	ca, _ := x509.ParseCertificate(caDER)
-	issue := func(serial int64, uri string, server bool) ([]byte, []byte) {
+	issue := func(serial int64, identity string, server bool) ([]byte, []byte) {
 		key, _ := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
 		template := &x509.Certificate{SerialNumber: big.NewInt(serial), NotBefore: now.Add(-time.Minute), NotAfter: now.Add(time.Hour), KeyUsage: x509.KeyUsageDigitalSignature}
 		if server {
@@ -133,7 +123,7 @@ func testCertificates(t *testing.T, directory string) (string, string, string, t
 			template.IPAddresses = []net.IP{net.ParseIP("127.0.0.1")}
 			template.ExtKeyUsage = []x509.ExtKeyUsage{x509.ExtKeyUsageServerAuth}
 		} else {
-			parsed, parseErr := url.Parse(uri)
+			parsed, parseErr := url.Parse(identity)
 			if parseErr != nil {
 				t.Fatal(parseErr)
 			}
@@ -144,20 +134,17 @@ func testCertificates(t *testing.T, directory string) (string, string, string, t
 		if createErr != nil {
 			t.Fatal(createErr)
 		}
-		keyDER, marshalErr := x509.MarshalPKCS8PrivateKey(key)
-		if marshalErr != nil {
-			t.Fatal(marshalErr)
-		}
+		keyDER, _ := x509.MarshalPKCS8PrivateKey(key)
 		return pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: der}), pem.EncodeToMemory(&pem.Block{Type: "PRIVATE KEY", Bytes: keyDER})
 	}
 	caPEM := pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: caDER})
-	serverCert, serverKey := issue(2, "", true)
-	clientCert, clientKey := issue(3, "spiffe://praetor.local/workload/praetor-scheduler", false)
-	clientCertificate, err := tls.X509KeyPair(clientCert, clientKey)
+	serverCertificate, serverKey := issue(2, "", true)
+	clientPEM, clientKey := issue(3, "spiffe://praetor.local/workload/praetor-secrets", false)
+	clientCertificate, err := tls.X509KeyPair(clientPEM, clientKey)
 	if err != nil {
 		t.Fatal(err)
 	}
 	roots := x509.NewCertPool()
 	roots.AppendCertsFromPEM(caPEM)
-	return writeFile(t, directory+"/ca.crt", caPEM, 0o444), writeFile(t, directory+"/tls.crt", serverCert, 0o444), writeFile(t, directory+"/tls.key", serverKey, 0o400), clientCertificate, roots
+	return writeSinkFile(t, directory+"/ca.crt", caPEM, 0o444), writeSinkFile(t, directory+"/tls.crt", serverCertificate, 0o444), writeSinkFile(t, directory+"/tls.key", serverKey, 0o400), clientCertificate, roots
 }
