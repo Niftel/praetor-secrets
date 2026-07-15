@@ -15,6 +15,7 @@ The project is in security design. Implementation begins only after the threat
 model and service API specification have been reviewed.
 
 - [Threat model](docs/threat-model.md)
+- [Service API and trust-boundary specification](docs/service-api.md)
 
 ## Core invariants
 
