@@ -12,8 +12,23 @@ import (
 	"testing"
 	"time"
 
+	"github.com/Niftel/praetor-secrets/audit"
 	"github.com/Niftel/praetor-secrets/credential"
 )
+
+type fakeAuditor struct {
+	events []audit.Event
+	status audit.SecurityStatus
+	err    error
+}
+
+func (auditor *fakeAuditor) Record(_ context.Context, event audit.Event) error {
+	auditor.events = append(auditor.events, event)
+	return auditor.err
+}
+func (auditor *fakeAuditor) Status(context.Context) (audit.SecurityStatus, error) {
+	return auditor.status, auditor.err
+}
 
 type fakeService struct {
 	caller       credential.WorkloadIdentity
@@ -215,6 +230,46 @@ func TestInspectAndUnknownRoutes(t *testing.T) {
 	server.ServeHTTP(recorder, request)
 	if recorder.Code != http.StatusNotFound {
 		t.Fatalf("unknown route: %d", recorder.Code)
+	}
+}
+
+func TestProtectedRequestCompletionAndSecurityStatus(t *testing.T) {
+	auditor := &fakeAuditor{status: audit.SecurityStatus{AuditIntegrityHealthy: true, PendingAuditEvents: 2, MaximumPendingAuditEvents: 100}}
+	server, err := NewServer(&fakeService{}, SPIFFEMapper{TrustDomain: "praetor.local"}, auditor)
+	if err != nil {
+		t.Fatal(err)
+	}
+	request := verifiedRequest(t, http.MethodGet, "/internal/v1/run-bindings/32b9fc25-fd71-47e6-b0e8-45db87df9f65", "", "spiffe://praetor.local/workload/praetor-executor/worker-7")
+	recorder := httptest.NewRecorder()
+	server.ServeHTTP(recorder, request)
+	if recorder.Code != http.StatusForbidden || recorder.Header().Get("X-Request-ID") == "" || len(auditor.events) != 1 {
+		t.Fatalf("status=%d headers=%v events=%+v", recorder.Code, recorder.Header(), auditor.events)
+	}
+	event := auditor.events[0]
+	if event.EventType != "request_completed" || event.Operation != "run_binding_inspected" || event.Result != "denied" || event.RequestID == "" || event.WorkloadIdentity != "praetor-executor:worker-7" {
+		t.Fatalf("event=%+v", event)
+	}
+	request = verifiedRequest(t, http.MethodGet, "/internal/v1/security-status", "", "spiffe://praetor.local/workload/praetor-secrets-auditor")
+	recorder = httptest.NewRecorder()
+	server.ServeHTTP(recorder, request)
+	if recorder.Code != http.StatusOK || !strings.Contains(recorder.Body.String(), `"pending_audit_events":2`) {
+		t.Fatalf("status=%d body=%s", recorder.Code, recorder.Body.String())
+	}
+	request = verifiedRequest(t, http.MethodGet, "/internal/v1/security-status", "", "spiffe://praetor.local/workload/praetor-scheduler")
+	recorder = httptest.NewRecorder()
+	server.ServeHTTP(recorder, request)
+	if recorder.Code != http.StatusForbidden {
+		t.Fatalf("scheduler status=%d", recorder.Code)
+	}
+}
+
+func TestProblemIncludesRequestID(t *testing.T) {
+	server := newTestServer(t, &fakeService{})
+	request := httptest.NewRequest(http.MethodGet, "/internal/v1/unknown", nil)
+	recorder := httptest.NewRecorder()
+	server.ServeHTTP(recorder, request)
+	if recorder.Code != http.StatusUnauthorized || !strings.Contains(recorder.Body.String(), "request_id") || recorder.Header().Get("X-Request-ID") == "" {
+		t.Fatalf("headers=%v body=%s", recorder.Header(), recorder.Body.String())
 	}
 }
 

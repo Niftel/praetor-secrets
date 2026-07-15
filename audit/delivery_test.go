@@ -71,3 +71,24 @@ func TestDeliveryWorkerConfigurationAndStatus(t *testing.T) {
 		t.Fatal("delivery time missing")
 	}
 }
+
+func TestCompletionAndStableResults(t *testing.T) {
+	started := time.Date(2026, 7, 15, 12, 0, 0, 0, time.UTC)
+	ctx := WithRequest(context.Background(), Request{ID: "request-1", WorkloadIdentity: "praetor-scheduler", Operation: "run_binding_inspected", StartedAt: started})
+	event := Completion(ctx, "success", "completed", started.Add(20*time.Millisecond))
+	if event.RequestID != "request-1" || event.LatencyClass != "medium" || event.WorkloadIdentity != "praetor-scheduler" {
+		t.Fatalf("event=%+v", event)
+	}
+	for _, test := range []struct {
+		status int
+		result string
+	}{{200, "success"}, {403, "denied"}, {404, "rejected"}, {500, "error"}} {
+		result, _ := StableResult(test.status)
+		if result != test.result {
+			t.Fatalf("status=%d result=%s", test.status, result)
+		}
+	}
+	if _, err := NewRecorder(nil, nil, nil); !errors.Is(err, ErrAudit) {
+		t.Fatalf("invalid recorder: %v", err)
+	}
+}

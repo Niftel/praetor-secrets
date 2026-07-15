@@ -77,6 +77,8 @@ trust domain:
 
 - `spiffe://<trust-domain>/workload/praetor-scheduler`
 - `spiffe://<trust-domain>/workload/praetor-executor/<instance>`
+- `spiffe://<trust-domain>/workload/praetor-secrets-operator`
+- `spiffe://<trust-domain>/workload/praetor-secrets-auditor`
 
 Certificate subjects, DNS SANs, source addresses, proxy headers, and identity
 headers are ignored. Scheduler routes cannot be called by executor identities,
@@ -140,6 +142,15 @@ downtime does not block mutations until the bounded local spool is exhausted.
 Records are sent in sequence order over HTTPS with a stable MAC-derived
 idempotency key. A record is acknowledged locally only after a 2xx response;
 failures retry without skipping later records.
+
+Every protected request receives a generated request ID and emits a value-free
+completion event containing the verified workload identity, stable operation,
+result, reason code, and latency class. Successful security mutations persist
+their completion and state-transition events in the same transaction. The
+operator and auditor identities may read `/internal/v1/security-status`, which
+reports only audit integrity, delivery degradation, pending queue pressure, and
+the last successful delivery time. Scheduler and executor identities cannot
+read this endpoint.
 
 ## Core invariants
 

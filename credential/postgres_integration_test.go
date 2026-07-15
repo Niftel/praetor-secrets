@@ -187,6 +187,43 @@ func TestPostgresMutationFailsClosedWithoutAuditSpool(t *testing.T) {
 	}
 }
 
+func TestPostgresMutationRollsBackWhenCompletionEventCannotFit(t *testing.T) {
+	pool := postgresTestPool(t)
+	ctx := context.Background()
+	if err := ApplyPostgresMigrations(ctx, pool); err != nil {
+		t.Fatal(err)
+	}
+	keys, err := masterkey.Load(masterkey.Config{CurrentPath: writePostgresTestKey(t)})
+	if err != nil {
+		t.Fatal(err)
+	}
+	manager, err := NewPostgresManager(keys, testSchemas{}, pool)
+	if err != nil {
+		t.Fatal(err)
+	}
+	spool, err := audit.New(bytes.Repeat([]byte{0x31}, 32), 1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := manager.RequireAuditSpool(spool); err != nil {
+		t.Fatal(err)
+	}
+	requestContext := audit.WithRequest(ctx, audit.Request{ID: "request-1", WorkloadIdentity: "praetor-api", Operation: "credential_created", StartedAt: time.Now().UTC()})
+	if _, err := manager.CreateContext(requestContext, validCreate()); !errors.Is(err, ErrStorage) {
+		t.Fatalf("mutation did not fail closed: %v", err)
+	}
+	var credentials, events int
+	if err := pool.QueryRow(ctx, "SELECT count(*) FROM credentials").Scan(&credentials); err != nil {
+		t.Fatal(err)
+	}
+	if err := pool.QueryRow(ctx, "SELECT count(*) FROM audit_spool").Scan(&events); err != nil {
+		t.Fatal(err)
+	}
+	if credentials != 0 || events != 0 {
+		t.Fatalf("partial commit credentials=%d events=%d", credentials, events)
+	}
+}
+
 func TestPostgresConcurrentVersionCheck(t *testing.T) {
 	pool := postgresTestPool(t)
 	ctx := context.Background()

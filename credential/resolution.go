@@ -26,8 +26,10 @@ var (
 type WorkloadRole string
 
 const (
-	RoleScheduler WorkloadRole = "praetor-scheduler"
-	RoleExecutor  WorkloadRole = "praetor-executor"
+	RoleScheduler       WorkloadRole = "praetor-scheduler"
+	RoleExecutor        WorkloadRole = "praetor-executor"
+	RoleSecretsOperator WorkloadRole = "praetor-secrets-operator"
+	RoleSecretsAuditor  WorkloadRole = "praetor-secrets-auditor"
 )
 
 type WorkloadIdentity struct {

@@ -2,13 +2,16 @@ package transport
 
 import (
 	"context"
+	"crypto/rand"
 	"crypto/tls"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"net/http"
 	"strings"
 	"time"
 
+	"github.com/Niftel/praetor-secrets/audit"
 	"github.com/Niftel/praetor-secrets/credential"
 )
 
@@ -22,13 +25,23 @@ type CredentialService interface {
 type Server struct {
 	service CredentialService
 	mapper  SPIFFEMapper
+	auditor AuditRecorder
 }
 
-func NewServer(service CredentialService, mapper SPIFFEMapper) (*Server, error) {
-	if service == nil || mapper.TrustDomain == "" {
+type AuditRecorder interface {
+	Record(context.Context, audit.Event) error
+	Status(context.Context) (audit.SecurityStatus, error)
+}
+
+func NewServer(service CredentialService, mapper SPIFFEMapper, auditors ...AuditRecorder) (*Server, error) {
+	if service == nil || mapper.TrustDomain == "" || len(auditors) > 1 {
 		return nil, credential.ErrInvalidInput
 	}
-	return &Server{service: service, mapper: mapper}, nil
+	server := &Server{service: service, mapper: mapper}
+	if len(auditors) == 1 {
+		server.auditor = auditors[0]
+	}
+	return server, nil
 }
 
 func NewHTTPServer(address string, handler *Server, tlsConfig *tls.Config) (*http.Server, error) {
@@ -46,14 +59,40 @@ func NewHTTPServer(address string, handler *Server, tlsConfig *tls.Config) (*htt
 }
 
 func (server *Server) ServeHTTP(writer http.ResponseWriter, request *http.Request) {
+	observed := &observedWriter{ResponseWriter: writer, status: http.StatusOK, requestID: newRequestID()}
+	writer = observed
 	secureHeaders(writer)
+	writer.Header().Set("X-Request-ID", observed.requestID)
+	operation := requestOperation(request.Method, request.URL.EscapedPath())
+	started := time.Now().UTC()
 	identity, err := server.requestIdentity(request)
+	workload := ""
+	if err == nil {
+		workload = identity.Subject
+	}
+	request = request.WithContext(audit.WithRequest(request.Context(), audit.Request{ID: observed.requestID, WorkloadIdentity: workload, Operation: operation, StartedAt: started}))
+	defer func() {
+		if server.auditor != nil {
+			if observed.status >= 200 && observed.status < 300 && transactionallyAudited(operation) {
+				return
+			}
+			result, reason := audit.StableResult(observed.status)
+			if observed.reason != "" {
+				reason = observed.reason
+			}
+			event := audit.Completion(request.Context(), result, reason, time.Now().UTC())
+			event.RunID = requestRunID(request.URL.EscapedPath())
+			_ = server.auditor.Record(request.Context(), event)
+		}
+	}()
 	if err != nil {
 		writeProblem(writer, http.StatusUnauthorized, "workload_authentication_failed")
 		return
 	}
 	path := request.URL.EscapedPath()
 	switch {
+	case request.Method == http.MethodGet && path == "/internal/v1/security-status":
+		server.securityStatus(writer, request, identity)
 	case request.Method == http.MethodPost && path == "/internal/v1/run-bindings":
 		server.registerBinding(writer, request, identity)
 	case request.Method == http.MethodGet && strings.HasPrefix(path, "/internal/v1/run-bindings/"):
@@ -80,6 +119,78 @@ func (server *Server) ServeHTTP(writer http.ResponseWriter, request *http.Reques
 	default:
 		writeProblem(writer, http.StatusNotFound, "resource_not_found")
 	}
+}
+
+type observedWriter struct {
+	http.ResponseWriter
+	status    int
+	requestID string
+	reason    string
+}
+
+func (writer *observedWriter) WriteHeader(status int) {
+	writer.status = status
+	writer.ResponseWriter.WriteHeader(status)
+}
+func newRequestID() string {
+	var value [16]byte
+	if _, err := rand.Read(value[:]); err != nil {
+		return "request-unavailable"
+	}
+	return hex.EncodeToString(value[:])
+}
+func requestOperation(method, path string) string {
+	switch {
+	case method == http.MethodPost && path == "/internal/v1/run-bindings":
+		return "run_binding_registered"
+	case method == http.MethodGet && path == "/internal/v1/security-status":
+		return "security_status_read"
+	case method == http.MethodGet && strings.HasPrefix(path, "/internal/v1/run-bindings/"):
+		return "run_binding_inspected"
+	case method == http.MethodPost && strings.HasSuffix(path, "/cancel"):
+		return "run_binding_canceled"
+	case method == http.MethodPost && strings.HasSuffix(path, "/credential:resolve"):
+		return "credential_resolved"
+	default:
+		return "unknown_route"
+	}
+}
+
+func transactionallyAudited(operation string) bool {
+	return operation == "run_binding_registered" || operation == "run_binding_canceled" || operation == "credential_resolved"
+}
+
+func requestRunID(path string) string {
+	trimmed := ""
+	switch {
+	case strings.HasPrefix(path, "/internal/v1/run-bindings/"):
+		trimmed = strings.TrimPrefix(path, "/internal/v1/run-bindings/")
+		trimmed = strings.TrimSuffix(trimmed, "/cancel")
+	case strings.HasPrefix(path, "/internal/v1/runs/"):
+		trimmed = strings.TrimPrefix(path, "/internal/v1/runs/")
+		trimmed = strings.TrimSuffix(trimmed, "/credential:resolve")
+	}
+	if strings.Contains(trimmed, "/") || len(trimmed) != 36 {
+		return ""
+	}
+	return trimmed
+}
+
+func (server *Server) securityStatus(writer http.ResponseWriter, request *http.Request, identity credential.WorkloadIdentity) {
+	if identity.Role != credential.RoleSecretsOperator && identity.Role != credential.RoleSecretsAuditor {
+		writeProblem(writer, http.StatusForbidden, "operation_not_permitted")
+		return
+	}
+	if server.auditor == nil {
+		writeProblem(writer, http.StatusServiceUnavailable, "service_unavailable")
+		return
+	}
+	status, err := server.auditor.Status(request.Context())
+	if err != nil {
+		writeProblem(writer, http.StatusServiceUnavailable, "service_unavailable")
+		return
+	}
+	writeJSON(writer, http.StatusOK, status)
 }
 
 func (server *Server) requestIdentity(request *http.Request) (credential.WorkloadIdentity, error) {
@@ -231,12 +342,23 @@ func writeServiceProblem(writer http.ResponseWriter, err error) {
 }
 
 func writeProblem(writer http.ResponseWriter, status int, code string) {
+	if observed, ok := writer.(*observedWriter); ok {
+		observed.reason = code
+	}
 	writer.Header().Set("Content-Type", "application/problem+json")
 	writer.WriteHeader(status)
 	_ = json.NewEncoder(writer).Encode(struct {
-		Code   string `json:"code"`
-		Status int    `json:"status"`
-	}{Code: code, Status: status})
+		Code      string `json:"code"`
+		Status    int    `json:"status"`
+		RequestID string `json:"request_id"`
+	}{Code: code, Status: status, RequestID: requestIDFromWriter(writer)})
+}
+
+func requestIDFromWriter(writer http.ResponseWriter) string {
+	if observed, ok := writer.(*observedWriter); ok {
+		return observed.requestID
+	}
+	return ""
 }
 
 func writeJSON(writer http.ResponseWriter, status int, value any) {
