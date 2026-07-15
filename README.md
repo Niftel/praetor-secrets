@@ -21,6 +21,7 @@ and Praetor integration follow.
 - [Threat model](docs/threat-model.md)
 - [Service API and trust-boundary specification](docs/service-api.md)
 - [Envelope record format](docs/envelope-format.md)
+- [Remote audit sink contract](docs/audit-sink-contract.md)
 
 ## Master-key files
 
