@@ -33,12 +33,13 @@ spec:
           command: ["/bin/sh", "-ec"]
           args:
             - |
+              rm -rf /restricted/*
               cp /source/runtime/database-url /restricted/database-url
               cp /source/server/tls.crt /restricted/tls.crt
               cp /source/server/tls.key /restricted/tls.key
               cp /source/server/ca.crt /restricted/ca.crt
-              chown -R 10001:10001 /restricted
               chmod 0400 /restricted/*
+              chown -R 10001:10001 /restricted
           securityContext:
             runAsUser: 0
             runAsNonRoot: false

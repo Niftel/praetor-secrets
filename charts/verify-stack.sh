@@ -20,6 +20,12 @@ grep -q 'name: praetor-audit-sink-ingress' "$output"
 grep -q 'app.kubernetes.io/name: praetor-secrets' "$output"
 grep -q 'app.kubernetes.io/instance: integration' "$output"
 grep -q 'command: \["/usr/local/bin/praetor-audit-sink"\]' "$output"
+awk '
+  /rm -rf \/restricted\/\*/ { state=1; next }
+  /chmod 0400 \/restricted/ { if (state != 1) exit 1; state=2; next }
+  /chown -R 10001:10001 \/restricted/ { if (state != 2) exit 1; complete++; state=0 }
+  END { if (complete != 2) exit 1 }
+' "$output"
 
 if helm template integration charts/praetor-secrets-stack \
   --set praetor-secrets.trustDomain=one.internal \

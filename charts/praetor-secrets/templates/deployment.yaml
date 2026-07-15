@@ -37,6 +37,7 @@ spec:
           command: ["/bin/sh", "-ec"]
           args:
             - |
+              rm -rf /restricted/*
               mkdir -p /restricted/runtime /restricted/server /restricted/audit
               cp /source/runtime/database-url /restricted/runtime/database-url
               cp /source/runtime/master-key /restricted/runtime/master-key
@@ -50,8 +51,8 @@ spec:
               cp /source/audit/tls.crt /restricted/audit/tls.crt
               cp /source/audit/tls.key /restricted/audit/tls.key
               cp /source/audit/ca.crt /restricted/audit/ca.crt
-              chown -R 10001:10001 /restricted
               chmod 0400 /restricted/runtime/* /restricted/server/* /restricted/audit/*
+              chown -R 10001:10001 /restricted
           securityContext:
             runAsUser: 0
             runAsNonRoot: false
