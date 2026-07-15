@@ -1,0 +1,22 @@
+praetor-secrets:
+  fullnameOverride: praetor-secrets
+  trustDomain: ""
+  secrets:
+    runtimeSecret: ""
+    serverTLSSecret: ""
+    auditSinkTLSSecret: ""
+  auditSink:
+    serviceName: praetor-audit-sink
+    servicePort: 8444
+
+praetor-audit-sink:
+  fullnameOverride: praetor-audit-sink
+  trustDomain: ""
+  secrets:
+    runtimeSecret: ""
+    serverTLSSecret: ""
+  networkPolicy:
+    enabled: true
+    sameReleaseOnly: true
+    clientPodSelector:
+      app.kubernetes.io/name: praetor-secrets

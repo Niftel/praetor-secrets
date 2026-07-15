@@ -1,0 +1,13 @@
+apiVersion: v2
+name: praetor-secrets-stack
+description: Integrated Praetor Secrets service and immutable remote audit sink
+type: application
+version: 0.1.0
+appVersion: "0.1.0"
+dependencies:
+  - name: praetor-secrets
+    version: 0.1.0
+    repository: file://../praetor-secrets
+  - name: praetor-audit-sink
+    version: 0.1.0
+    repository: file://../praetor-audit-sink

@@ -1,0 +1,11 @@
+{{- $service := index .Values "praetor-secrets" -}}
+{{- $sink := index .Values "praetor-audit-sink" -}}
+{{- if ne $service.trustDomain $sink.trustDomain -}}
+{{- fail "praetor-secrets and praetor-audit-sink trustDomain values must match" -}}
+{{- end -}}
+{{- if ne (int $service.auditSink.servicePort) (int $sink.service.port) -}}
+{{- fail "praetor-secrets auditSink.servicePort must match praetor-audit-sink service.port" -}}
+{{- end -}}
+{{- if ne $service.auditSink.serviceName $sink.fullnameOverride -}}
+{{- fail "praetor-secrets auditSink.serviceName must match praetor-audit-sink fullnameOverride" -}}
+{{- end -}}
