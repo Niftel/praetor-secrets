@@ -75,6 +75,10 @@ func Generate(config Config) error {
 	if err != nil {
 		return ErrInvalid
 	}
+	claimServer, claimServerKey, err := issueServer(workloadCA, "praetor-scheduler", config.Namespace, now)
+	if err != nil {
+		return ErrInvalid
+	}
 	auditServer, auditServerKey, err := issueServer(auditServerCA, "praetor-audit-sink", config.Namespace, now)
 	if err != nil {
 		return ErrInvalid
@@ -102,19 +106,23 @@ func Generate(config Config) error {
 	defer clear(masterKey)
 	defer clear(auditKey)
 	files := map[string][]byte{
-		"praetor-secrets-runtime/database-url": secretsDatabaseURL,
-		"praetor-secrets-runtime/master-key":   masterKey,
-		"praetor-secrets-runtime/audit-key":    auditKey,
-		"praetor-secrets-server/tls.crt":       secretsServer,
-		"praetor-secrets-server/tls.key":       secretsServerKey,
-		"praetor-secrets-server/ca.crt":        workloadCA.certificatePEM,
-		"praetor-secrets-audit-client/tls.crt": auditClient,
-		"praetor-secrets-audit-client/tls.key": auditClientKey,
-		"praetor-secrets-audit-client/ca.crt":  auditServerCA.certificatePEM,
-		"praetor-audit-runtime/database-url":   auditDatabaseURL,
-		"praetor-audit-server/tls.crt":         auditServer,
-		"praetor-audit-server/tls.key":         auditServerKey,
-		"praetor-audit-server/ca.crt":          auditClientCA.certificatePEM,
+		"praetor-secrets-runtime/database-url":      secretsDatabaseURL,
+		"praetor-secrets-runtime/master-key":        masterKey,
+		"praetor-secrets-runtime/audit-key":         auditKey,
+		"praetor-secrets-server/tls.crt":            secretsServer,
+		"praetor-secrets-server/tls.key":            secretsServerKey,
+		"praetor-secrets-server/ca.crt":             workloadCA.certificatePEM,
+		"clients/praetor-scheduler/claim.crt":       claimServer,
+		"clients/praetor-scheduler/claim.key":       claimServerKey,
+		"clients/praetor-scheduler/executor-ca.crt": workloadCA.certificatePEM,
+		"clients/praetor-executor/secrets-ca.crt":   workloadCA.certificatePEM,
+		"praetor-secrets-audit-client/tls.crt":      auditClient,
+		"praetor-secrets-audit-client/tls.key":      auditClientKey,
+		"praetor-secrets-audit-client/ca.crt":       auditServerCA.certificatePEM,
+		"praetor-audit-runtime/database-url":        auditDatabaseURL,
+		"praetor-audit-server/tls.crt":              auditServer,
+		"praetor-audit-server/tls.key":              auditServerKey,
+		"praetor-audit-server/ca.crt":               auditClientCA.certificatePEM,
 	}
 	for name, identity := range workloadClients {
 		certificate, key, err := issueClient(workloadCA, identity, now)
