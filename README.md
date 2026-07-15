@@ -11,9 +11,9 @@ Development is tracked in the private
 
 ## Current phase
 
-Core service implementation is underway. The envelope format and strict
-file-backed master-key loader are implemented; credential lifecycle and
-run-scoped resolution follow.
+Core service implementation is underway. The envelope format, strict
+file-backed master-key loader, and redacted credential lifecycle domain are
+implemented; durable storage, transport, and run-scoped resolution follow.
 
 - [Threat model](docs/threat-model.md)
 - [Service API and trust-boundary specification](docs/service-api.md)
@@ -29,6 +29,15 @@ During a bounded rotation window, a separate previous-key file may be mounted.
 Only the current key is used for new encryption; the previous key is accepted
 for decryption until all records have been rewrapped and verified. The previous
 file must then be removed.
+
+## Credential lifecycle
+
+Administrative credential operations return a metadata type that structurally
+cannot contain plaintext or ciphertext. Creates and replacements encrypt a
+complete schema-validated input payload as a new credential version. Metadata
+updates also create a new independently encrypted version so a future run
+binding can snapshot one coherent version. Organization ownership and credential
+type are immutable, and stale concurrent writes fail without partial changes.
 
 ## Core invariants
 
