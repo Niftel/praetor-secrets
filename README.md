@@ -14,8 +14,8 @@ Development is tracked in the private
 Core service implementation is underway. The envelope format, strict
 file-backed master-key loader, redacted credential lifecycle, and transactional
 PostgreSQL persistence are implemented. The run-binding and executor-resolution
-domain and authenticated internal transport are implemented; service assembly,
-audit delivery, and Praetor integration follow.
+domain, authenticated internal transport, and executable service assembly are
+implemented; audit delivery and Praetor integration follow.
 
 - [Threat model](docs/threat-model.md)
 - [Service API and trust-boundary specification](docs/service-api.md)
@@ -82,6 +82,36 @@ headers are ignored. Scheduler routes cannot be called by executor identities,
 and executor resolution cannot be called by the scheduler. Secret-bearing
 responses disable caching and compression, close the connection after the
 bounded response, and use stable value-free errors.
+
+## Running the service
+
+Build the executable with `go build ./cmd/praetor-secrets`. It applies database
+migrations before becoming ready and shuts down gracefully on `SIGTERM`.
+Secret values are accepted through restricted files, not environment variables
+or command-line arguments.
+
+Required environment variables:
+
+| Variable | Purpose |
+| --- | --- |
+| `PRAETOR_SECRETS_LISTEN_ADDRESS` | mTLS API listener, for example `0.0.0.0:8443` |
+| `PRAETOR_SECRETS_HEALTH_LISTEN_ADDRESS` | non-secret health listener, for example `0.0.0.0:8081` |
+| `PRAETOR_SECRETS_TRUST_DOMAIN` | SPIFFE trust domain |
+| `PRAETOR_SECRETS_DATABASE_URL_FILE` | restricted file containing the PostgreSQL URL |
+| `PRAETOR_SECRETS_MASTER_KEY_FILE` | restricted current 32-byte master-key file |
+| `PRAETOR_SECRETS_TLS_CERTIFICATE_FILE` | server certificate chain |
+| `PRAETOR_SECRETS_TLS_PRIVATE_KEY_FILE` | restricted server private-key file |
+| `PRAETOR_SECRETS_CLIENT_CA_FILE` | CA used to authenticate workload clients |
+
+`PRAETOR_SECRETS_PREVIOUS_KEY_FILE` is optional during controlled rotation.
+Optional bounded resource settings are `PRAETOR_SECRETS_SHUTDOWN_TIMEOUT`
+(default `20s`), `PRAETOR_SECRETS_MAX_DATABASE_CONNECTIONS` (default `10`),
+and `PRAETOR_SECRETS_MAX_NETWORK_CONNECTIONS` (default `100`).
+
+The health listener exposes `GET /livez` and `GET /readyz`. It carries no
+credential routes and should remain restricted to the cluster health-check
+network. Readiness is reported only while the API listener is running and the
+database responds.
 
 ## Core invariants
 
