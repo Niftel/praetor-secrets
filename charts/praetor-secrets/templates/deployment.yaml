@@ -1,0 +1,154 @@
+{{- if not .Values.trustDomain }}{{ fail "trustDomain is required" }}{{ end }}
+{{- if not .Values.secrets.runtimeSecret }}{{ fail "secrets.runtimeSecret is required" }}{{ end }}
+{{- if not .Values.secrets.serverTLSSecret }}{{ fail "secrets.serverTLSSecret is required" }}{{ end }}
+{{- if not .Values.secrets.auditSinkTLSSecret }}{{ fail "secrets.auditSinkTLSSecret is required" }}{{ end }}
+{{- if not (hasPrefix "https://" .Values.auditSink.url) }}{{ fail "auditSink.url must use https://" }}{{ end }}
+{{- if eq (int .Values.service.port) (int .Values.service.healthPort) }}{{ fail "service.port and service.healthPort must differ" }}{{ end }}
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "praetor-secrets.fullname" . }}
+  labels:
+    {{- include "praetor-secrets.labels" . | nindent 4 }}
+spec:
+  replicas: {{ .Values.replicaCount }}
+  selector:
+    matchLabels:
+      {{- include "praetor-secrets.selectorLabels" . | nindent 6 }}
+  template:
+    metadata:
+      labels:
+        {{- include "praetor-secrets.selectorLabels" . | nindent 8 }}
+      {{- with .Values.podAnnotations }}
+      annotations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+    spec:
+      serviceAccountName: {{ include "praetor-secrets.serviceAccountName" . }}
+      automountServiceAccountToken: false
+      securityContext:
+        {{- toYaml .Values.podSecurityContext | nindent 8 }}
+      {{- with .Values.image.pullSecrets }}
+      imagePullSecrets:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      initContainers:
+        - name: stage-restricted-files
+          image: alpine:3.23@sha256:fd791d74b68913cbb027c6546007b3f0d3bc45125f797758156952bc2d6daf40
+          command: ["/bin/sh", "-ec"]
+          args:
+            - |
+              mkdir -p /restricted/runtime /restricted/server /restricted/audit
+              cp /source/runtime/database-url /restricted/runtime/database-url
+              cp /source/runtime/master-key /restricted/runtime/master-key
+              cp /source/runtime/audit-key /restricted/runtime/audit-key
+              {{- if .Values.secrets.previousKeyEnabled }}
+              cp /source/runtime/previous-key /restricted/runtime/previous-key
+              {{- end }}
+              cp /source/server/tls.crt /restricted/server/tls.crt
+              cp /source/server/tls.key /restricted/server/tls.key
+              cp /source/server/ca.crt /restricted/server/ca.crt
+              cp /source/audit/tls.crt /restricted/audit/tls.crt
+              cp /source/audit/tls.key /restricted/audit/tls.key
+              cp /source/audit/ca.crt /restricted/audit/ca.crt
+              chown -R 10001:10001 /restricted
+              chmod 0400 /restricted/runtime/* /restricted/server/* /restricted/audit/*
+          securityContext:
+            runAsUser: 0
+            runAsNonRoot: false
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: ["ALL"]
+              add: ["CHOWN"]
+          volumeMounts:
+            - { name: runtime-source, mountPath: /source/runtime, readOnly: true }
+            - { name: server-source, mountPath: /source/server, readOnly: true }
+            - { name: audit-source, mountPath: /source/audit, readOnly: true }
+            - { name: restricted, mountPath: /restricted }
+      containers:
+        - name: praetor-secrets
+          image: {{ printf "%s:%s" .Values.image.repository (default .Chart.AppVersion .Values.image.tag) | quote }}
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          securityContext:
+            runAsUser: 10001
+            runAsGroup: 10001
+            runAsNonRoot: true
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: ["ALL"]
+          env:
+            - { name: PRAETOR_SECRETS_LISTEN_ADDRESS, value: {{ printf ":%v" .Values.service.port | quote }} }
+            - { name: PRAETOR_SECRETS_HEALTH_LISTEN_ADDRESS, value: {{ printf ":%v" .Values.service.healthPort | quote }} }
+            - { name: PRAETOR_SECRETS_TRUST_DOMAIN, value: {{ .Values.trustDomain | quote }} }
+            - { name: PRAETOR_SECRETS_DATABASE_URL_FILE, value: /restricted/runtime/database-url }
+            - { name: PRAETOR_SECRETS_MASTER_KEY_FILE, value: /restricted/runtime/master-key }
+            - { name: PRAETOR_SECRETS_AUDIT_KEY_FILE, value: /restricted/runtime/audit-key }
+            {{- if .Values.secrets.previousKeyEnabled }}
+            - { name: PRAETOR_SECRETS_PREVIOUS_KEY_FILE, value: /restricted/runtime/previous-key }
+            {{- end }}
+            - { name: PRAETOR_SECRETS_TLS_CERTIFICATE_FILE, value: /restricted/server/tls.crt }
+            - { name: PRAETOR_SECRETS_TLS_PRIVATE_KEY_FILE, value: /restricted/server/tls.key }
+            - { name: PRAETOR_SECRETS_CLIENT_CA_FILE, value: /restricted/server/ca.crt }
+            - { name: PRAETOR_SECRETS_AUDIT_SINK_URL, value: {{ .Values.auditSink.url | quote }} }
+            - { name: PRAETOR_SECRETS_AUDIT_SINK_CA_FILE, value: /restricted/audit/ca.crt }
+            - { name: PRAETOR_SECRETS_AUDIT_SINK_CERTIFICATE_FILE, value: /restricted/audit/tls.crt }
+            - { name: PRAETOR_SECRETS_AUDIT_SINK_PRIVATE_KEY_FILE, value: /restricted/audit/tls.key }
+            - { name: PRAETOR_SECRETS_SHUTDOWN_TIMEOUT, value: {{ .Values.limits.shutdownTimeout | quote }} }
+            - { name: PRAETOR_SECRETS_MAX_DATABASE_CONNECTIONS, value: {{ .Values.limits.databaseConnections | quote }} }
+            - { name: PRAETOR_SECRETS_MAX_NETWORK_CONNECTIONS, value: {{ .Values.limits.networkConnections | quote }} }
+            - { name: PRAETOR_SECRETS_MAX_PENDING_AUDIT_EVENTS, value: {{ .Values.limits.pendingAuditEvents | quote }} }
+            - { name: PRAETOR_SECRETS_AUDIT_DELIVERY_BATCH_SIZE, value: {{ .Values.auditSink.batchSize | quote }} }
+            - { name: PRAETOR_SECRETS_AUDIT_DELIVERY_POLL_INTERVAL, value: {{ .Values.auditSink.pollInterval | quote }} }
+            - { name: PRAETOR_SECRETS_AUDIT_DELIVERY_REQUEST_TIMEOUT, value: {{ .Values.auditSink.requestTimeout | quote }} }
+          ports:
+            - { name: mtls, containerPort: {{ .Values.service.port }}, protocol: TCP }
+            - { name: health, containerPort: {{ .Values.service.healthPort }}, protocol: TCP }
+          readinessProbe:
+            httpGet: { path: /readyz, port: health, scheme: HTTP }
+            initialDelaySeconds: 2
+            periodSeconds: 5
+            timeoutSeconds: 2
+            failureThreshold: 3
+          livenessProbe:
+            httpGet: { path: /livez, port: health, scheme: HTTP }
+            initialDelaySeconds: 5
+            periodSeconds: 10
+            timeoutSeconds: 2
+            failureThreshold: 3
+          volumeMounts:
+            - { name: restricted, mountPath: /restricted, readOnly: true }
+          {{- with .Values.resources }}
+          resources:
+            {{- toYaml . | nindent 12 }}
+          {{- end }}
+      volumes:
+        - name: runtime-source
+          secret:
+            secretName: {{ .Values.secrets.runtimeSecret | quote }}
+            defaultMode: 0400
+        - name: server-source
+          secret:
+            secretName: {{ .Values.secrets.serverTLSSecret | quote }}
+            defaultMode: 0400
+        - name: audit-source
+          secret:
+            secretName: {{ .Values.secrets.auditSinkTLSSecret | quote }}
+            defaultMode: 0400
+        - name: restricted
+          emptyDir:
+            medium: Memory
+            sizeLimit: 4Mi
+      {{- with .Values.nodeSelector }}
+      nodeSelector:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.affinity }}
+      affinity:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.tolerations }}
+      tolerations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}

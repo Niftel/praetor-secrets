@@ -1,0 +1,9 @@
+apiVersion: v2
+name: praetor-secrets
+description: Provider-independent, run-scoped secrets service for Praetor
+type: application
+version: 0.1.0
+appVersion: "0.1.0"
+home: https://github.com/Niftel/praetor-secrets
+sources:
+  - https://github.com/Niftel/praetor-secrets

@@ -58,3 +58,12 @@ jobs:
 
       - name: Build
         run: go build ./...
+
+      - name: Lint Helm chart
+        run: >-
+          helm lint charts/praetor-secrets
+          --set trustDomain=praetor.internal
+          --set secrets.runtimeSecret=runtime
+          --set secrets.serverTLSSecret=server
+          --set secrets.auditSinkTLSSecret=audit
+          --set auditSink.url=https://audit.internal/events

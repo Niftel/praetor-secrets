@@ -1,0 +1,14 @@
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "praetor-secrets.fullname" . }}
+  labels:
+    {{- include "praetor-secrets.labels" . | nindent 4 }}
+spec:
+  selector:
+    {{- include "praetor-secrets.selectorLabels" . | nindent 4 }}
+  ports:
+    - name: mtls
+      port: {{ .Values.service.port }}
+      targetPort: mtls
+      protocol: TCP

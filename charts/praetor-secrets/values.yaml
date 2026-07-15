@@ -1,0 +1,48 @@
+replicaCount: 1
+
+image:
+  repository: ghcr.io/niftel/praetor-secrets
+  tag: ""
+  pullPolicy: IfNotPresent
+  pullSecrets: []
+
+serviceAccount:
+  create: true
+  name: ""
+  annotations: {}
+
+service:
+  port: 8443
+  healthPort: 8081
+
+trustDomain: ""
+
+# Required pre-existing Secret names. Key contents are never accepted in Helm
+# values. See README.md for the exact keys and certificate identities.
+secrets:
+  runtimeSecret: ""       # database-url, master-key, audit-key; optionally previous-key
+  serverTLSSecret: ""     # tls.crt, tls.key, ca.crt (workload client CA)
+  auditSinkTLSSecret: ""  # tls.crt, tls.key, ca.crt (audit sink server CA)
+  previousKeyEnabled: false
+
+auditSink:
+  url: ""
+  batchSize: 100
+  pollInterval: 1s
+  requestTimeout: 5s
+
+limits:
+  databaseConnections: 10
+  networkConnections: 100
+  pendingAuditEvents: 100000
+  shutdownTimeout: 20s
+
+resources: {}
+podAnnotations: {}
+podSecurityContext:
+  seccompProfile:
+    type: RuntimeDefault
+
+nodeSelector: {}
+tolerations: []
+affinity: {}
