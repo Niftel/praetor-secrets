@@ -163,3 +163,26 @@ func TestDeliveryWorkerRetriesInOrder(t *testing.T) {
 		t.Fatalf("status=%+v", worker.Status())
 	}
 }
+
+func TestRecorderAndSecurityStatus(t *testing.T) {
+	pool := auditTestPool(t)
+	spool, _ := New(bytes.Repeat([]byte{3}, 32), 10)
+	sink := &collectingSink{}
+	worker, _ := NewDeliveryWorker(spool, pool, sink, DeliveryConfig{BatchSize: 10, PollInterval: time.Second, RequestTimeout: time.Second})
+	recorder, err := NewRecorder(spool, pool, worker)
+	if err != nil {
+		t.Fatal(err)
+	}
+	event := validEvent()
+	event.EventType = "request_completed"
+	event.Operation = "run_binding_inspected"
+	event.RequestID = "request-1"
+	event.LatencyClass = "fast"
+	if err := recorder.Record(context.Background(), event); err != nil {
+		t.Fatal(err)
+	}
+	status, err := recorder.Status(context.Background())
+	if err != nil || !status.AuditIntegrityHealthy || status.PendingAuditEvents != 1 || status.MaximumPendingAuditEvents != 10 {
+		t.Fatalf("status=%+v err=%v", status, err)
+	}
+}

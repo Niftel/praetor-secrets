@@ -143,7 +143,11 @@ func Build(ctx context.Context, config Config) (*Runtime, error) {
 	if err != nil {
 		return nil, ErrStartup
 	}
-	handler, err := transport.NewServer(manager, transport.SPIFFEMapper{TrustDomain: config.TrustDomain})
+	auditRecorder, err := audit.NewRecorder(auditSpool, pool, auditWorker)
+	if err != nil {
+		return nil, ErrStartup
+	}
+	handler, err := transport.NewServer(manager, transport.SPIFFEMapper{TrustDomain: config.TrustDomain}, auditRecorder)
 	if err != nil {
 		return nil, ErrStartup
 	}

@@ -50,6 +50,30 @@ func (b *postgresBackend) appendAudit(ctx context.Context, tx pgx.Tx, event audi
 	return nil
 }
 
+func (b *postgresBackend) appendCompletion(ctx context.Context, tx pgx.Tx, event audit.Event) error {
+	request, ok := audit.RequestFromContext(ctx)
+	if !ok {
+		return nil
+	}
+	completion := audit.Completion(ctx, "success", "completed", event.Timestamp)
+	completion.OrganizationID = event.OrganizationID
+	completion.CredentialID = event.CredentialID
+	completion.RunID = event.RunID
+	completion.ExecutorIdentity = event.ExecutorIdentity
+	completion.CredentialVersion = event.CredentialVersion
+	completion.CredentialSchema = event.CredentialSchema
+	completion.KeyVersion = event.KeyVersion
+	completion.RequestID = request.ID
+	return b.appendAudit(ctx, tx, completion)
+}
+
+func (b *postgresBackend) appendSuccessfulTransition(ctx context.Context, tx pgx.Tx, event audit.Event) error {
+	if err := b.appendAudit(ctx, tx, event); err != nil {
+		return err
+	}
+	return b.appendCompletion(ctx, tx, event)
+}
+
 // NewPostgresManager creates the production credential manager. Migrations must
 // be applied explicitly during deployment before serving traffic.
 func NewPostgresManager(keys masterkey.Set, schemas SchemaRegistry, pool *pgxpool.Pool, injectors ...InjectorRegistry) (*Manager, error) {
@@ -166,7 +190,7 @@ func (b *postgresBackend) Create(ctx context.Context, idempotencyID string, dige
 		organizationID, idempotencyKey, digest[:], metadataJSON, metadata.ID, metadata.CreatedAt); err != nil {
 		return Metadata{}, ErrStorage
 	}
-	if err := b.appendAudit(ctx, tx, credentialAudit("credential_created", metadata)); err != nil {
+	if err := b.appendSuccessfulTransition(ctx, tx, credentialAudit("credential_created", metadata)); err != nil {
 		return Metadata{}, err
 	}
 	if err := tx.Commit(ctx); err != nil {
@@ -235,7 +259,7 @@ func (b *postgresBackend) Update(ctx context.Context, organizationID, credential
         VALUES ($1, $2, $3, $4, $5)`, credentialID, metadata.Version, recordJSON, record.MasterKeyID, metadata.UpdatedAt); err != nil {
 		return Metadata{}, ErrStorage
 	}
-	if err := b.appendAudit(ctx, tx, credentialAudit(operation, metadata)); err != nil {
+	if err := b.appendSuccessfulTransition(ctx, tx, credentialAudit(operation, metadata)); err != nil {
 		return Metadata{}, err
 	}
 	if err := tx.Commit(ctx); err != nil {

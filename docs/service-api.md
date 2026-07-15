@@ -470,6 +470,11 @@ permitted.
   returns active key IDs, insecure-mode state, certificate expiry, pending
   rotations, and policy versions without secret material.
 
+The initial executable reports the implemented audit subset: chain integrity,
+delivery degradation, pending and maximum spool counts, and the last successful
+delivery time. Key rotation and policy-version fields are added with their
+respective reviewed subsystems rather than returned as placeholders.
+
 Public health responses do not include database addresses, key IDs, certificate
 subjects, dependency versions, record counts, or error details useful for
 reconnaissance.

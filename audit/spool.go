@@ -44,6 +44,8 @@ type Event struct {
 	CredentialVersion uint64    `json:"credential_version,omitempty"`
 	CredentialSchema  uint32    `json:"credential_schema_version,omitempty"`
 	KeyVersion        string    `json:"key_version,omitempty"`
+	RequestID         string    `json:"request_id,omitempty"`
+	LatencyClass      string    `json:"latency_class,omitempty"`
 }
 
 type Spool struct {
@@ -260,12 +262,26 @@ func validate(event Event) error {
 		!token(event.EventType) || !token(event.Operation) || !token(event.Result) || !token(event.ReasonCode) {
 		return ErrEvent
 	}
-	for _, value := range []string{event.WorkloadIdentity, event.HumanActor, event.OrganizationID, event.CredentialID, event.RunID, event.ExecutorIdentity, event.KeyVersion} {
+	if event.LatencyClass != "" && !token(event.LatencyClass) {
+		return ErrEvent
+	}
+	for _, value := range []string{event.WorkloadIdentity, event.HumanActor, event.OrganizationID, event.CredentialID, event.RunID, event.ExecutorIdentity, event.KeyVersion, event.RequestID} {
 		if len(value) > 255 || strings.ContainsAny(value, "\x00\r\n") {
 			return ErrEvent
 		}
 	}
 	return nil
+}
+
+func (spool *Spool) PendingCount(ctx context.Context, pool *pgxpool.Pool) (int64, int64, error) {
+	if spool == nil || pool == nil {
+		return 0, 0, ErrAudit
+	}
+	var pending int64
+	if err := pool.QueryRow(ctx, `SELECT count(*) FROM audit_spool WHERE delivered_at IS NULL`).Scan(&pending); err != nil {
+		return 0, 0, ErrAudit
+	}
+	return pending, spool.maximumPending, nil
 }
 
 func token(value string) bool {
