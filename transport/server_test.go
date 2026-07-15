@@ -38,6 +38,19 @@ type fakeService struct {
 	err          error
 }
 
+func (service *fakeService) CreateContext(_ context.Context, request credential.CreateRequest) (credential.Metadata, error) {
+	return credential.Metadata{ID: "98d977e4-3f0a-44cd-81cb-8965d5522996", OrganizationID: request.OrganizationID, Name: request.Name, CredentialType: request.CredentialType, Version: 1}, service.err
+}
+func (service *fakeService) GetContext(_ context.Context, organizationID, credentialID string) (credential.Metadata, error) {
+	return credential.Metadata{ID: credentialID, OrganizationID: organizationID}, service.err
+}
+func (service *fakeService) ReplaceInputsContext(_ context.Context, request credential.ReplaceInputsRequest) (credential.Metadata, error) {
+	return credential.Metadata{ID: request.CredentialID, OrganizationID: request.OrganizationID, Version: request.ExpectedVersion + 1}, service.err
+}
+func (service *fakeService) UpdateMetadataContext(_ context.Context, request credential.UpdateMetadataRequest) (credential.Metadata, error) {
+	return credential.Metadata{ID: request.CredentialID, OrganizationID: request.OrganizationID, Name: request.Name, Version: request.ExpectedVersion + 1}, service.err
+}
+
 func (service *fakeService) RegisterBinding(_ context.Context, caller credential.WorkloadIdentity, request credential.RegisterBindingRequest) (credential.Binding, error) {
 	service.caller, service.registration = caller, request
 	return credential.Binding{RunID: request.RunID}, service.err
@@ -270,6 +283,87 @@ func TestProblemIncludesRequestID(t *testing.T) {
 	server.ServeHTTP(recorder, request)
 	if recorder.Code != http.StatusUnauthorized || !strings.Contains(recorder.Body.String(), "request_id") || recorder.Header().Get("X-Request-ID") == "" {
 		t.Fatalf("headers=%v body=%s", recorder.Header(), recorder.Body.String())
+	}
+}
+
+func TestCredentialAdministrationRoutesAreAPIOnlyAndRedacted(t *testing.T) {
+	server := newTestServer(t, &fakeService{})
+	body := `{"organization_id":"5","name":"machine","credential_type":"machine","schema_version":1,"inputs":{"username":"automation","password":"super-secret"},"actor":{"user_id":"104","username":"operator"}}`
+	request := verifiedRequest(t, http.MethodPost, "/internal/v1/credentials", body, "spiffe://praetor.local/workload/praetor-api")
+	request.Header.Set("Idempotency-Key", "create-1")
+	recorder := httptest.NewRecorder()
+	server.ServeHTTP(recorder, request)
+	if recorder.Code != http.StatusCreated || strings.Contains(recorder.Body.String(), "super-secret") || recorder.Header().Get("Location") == "" {
+		t.Fatalf("status=%d headers=%v body=%s", recorder.Code, recorder.Header(), recorder.Body.String())
+	}
+	request = verifiedRequest(t, http.MethodGet, "/internal/v1/credentials/98d977e4-3f0a-44cd-81cb-8965d5522996", "", "spiffe://praetor.local/workload/praetor-api")
+	request.Header.Set("X-Praetor-Organization-ID", "5")
+	recorder = httptest.NewRecorder()
+	server.ServeHTTP(recorder, request)
+	if recorder.Code != http.StatusOK {
+		t.Fatalf("get status=%d body=%s", recorder.Code, recorder.Body.String())
+	}
+	request = verifiedRequest(t, http.MethodGet, "/internal/v1/credentials/98d977e4-3f0a-44cd-81cb-8965d5522996", "", "spiffe://praetor.local/workload/praetor-scheduler")
+	request.Header.Set("X-Praetor-Organization-ID", "5")
+	recorder = httptest.NewRecorder()
+	server.ServeHTTP(recorder, request)
+	if recorder.Code != http.StatusForbidden {
+		t.Fatalf("scheduler status=%d", recorder.Code)
+	}
+	request = verifiedRequest(t, http.MethodGet, "/internal/v1/credentials/98d977e4-3f0a-44cd-81cb-8965d5522996", "", "spiffe://praetor.local/workload/praetor-api")
+	recorder = httptest.NewRecorder()
+	server.ServeHTTP(recorder, request)
+	if recorder.Code != http.StatusBadRequest {
+		t.Fatalf("missing org status=%d", recorder.Code)
+	}
+}
+
+func TestCredentialReplacementRenameAndValidation(t *testing.T) {
+	server := newTestServer(t, &fakeService{})
+	credentialPath := "/internal/v1/credentials/98d977e4-3f0a-44cd-81cb-8965d5522996"
+	replace := `{"expected_version":1,"inputs":{"username":"new-user","password":"new-secret"},"actor":{"user_id":"104"}}`
+	request := verifiedRequest(t, http.MethodPut, credentialPath+"/inputs", replace, "spiffe://praetor.local/workload/praetor-api")
+	request.Header.Set("X-Praetor-Organization-ID", "5")
+	recorder := httptest.NewRecorder()
+	server.ServeHTTP(recorder, request)
+	if recorder.Code != http.StatusOK || strings.Contains(recorder.Body.String(), "new-secret") {
+		t.Fatalf("replace status=%d body=%s", recorder.Code, recorder.Body.String())
+	}
+	rename := `{"expected_version":2,"name":"renamed","actor":{"user_id":"104","authorization_decision_id":"decision-1"}}`
+	request = verifiedRequest(t, http.MethodPatch, credentialPath, rename, "spiffe://praetor.local/workload/praetor-api")
+	request.Header.Set("X-Praetor-Organization-ID", "5")
+	recorder = httptest.NewRecorder()
+	server.ServeHTTP(recorder, request)
+	if recorder.Code != http.StatusOK || !strings.Contains(recorder.Body.String(), "renamed") {
+		t.Fatalf("rename status=%d body=%s", recorder.Code, recorder.Body.String())
+	}
+	invalid := `{"expected_version":2,"name":"renamed","actor":{"user_id":"bad\nactor"}}`
+	request = verifiedRequest(t, http.MethodPatch, credentialPath, invalid, "spiffe://praetor.local/workload/praetor-api")
+	request.Header.Set("X-Praetor-Organization-ID", "5")
+	recorder = httptest.NewRecorder()
+	server.ServeHTTP(recorder, request)
+	if recorder.Code != http.StatusBadRequest {
+		t.Fatalf("invalid actor status=%d", recorder.Code)
+	}
+	request = verifiedRequest(t, http.MethodDelete, credentialPath, "", "spiffe://praetor.local/workload/praetor-api")
+	request.Header.Set("X-Praetor-Organization-ID", "5")
+	recorder = httptest.NewRecorder()
+	server.ServeHTTP(recorder, request)
+	if recorder.Code != http.StatusNotFound {
+		t.Fatalf("unsupported method status=%d", recorder.Code)
+	}
+}
+
+func TestCredentialConflictMappings(t *testing.T) {
+	for _, test := range []struct {
+		err  error
+		code string
+	}{{credential.ErrIdempotencyConflict, "idempotency_conflict"}, {credential.ErrVersionConflict, "version_conflict"}} {
+		recorder := httptest.NewRecorder()
+		writeServiceProblem(recorder, test.err)
+		if recorder.Code != http.StatusConflict || !strings.Contains(recorder.Body.String(), test.code) {
+			t.Fatalf("err=%v status=%d body=%s", test.err, recorder.Code, recorder.Body.String())
+		}
 	}
 }
 

@@ -30,6 +30,7 @@ const (
 	RoleExecutor        WorkloadRole = "praetor-executor"
 	RoleSecretsOperator WorkloadRole = "praetor-secrets-operator"
 	RoleSecretsAuditor  WorkloadRole = "praetor-secrets-auditor"
+	RoleAPI             WorkloadRole = "praetor-api"
 )
 
 type WorkloadIdentity struct {

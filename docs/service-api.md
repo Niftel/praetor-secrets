@@ -244,6 +244,11 @@ content returns `409 idempotency_conflict`.
 
 `GET /internal/v1/credentials/{credential_id}`
 
+Credential-ID routes require `X-Praetor-Organization-ID` containing the
+organization already authorized by Praetor API. The Secrets Service uses this
+as a second organization fence and returns cross-organization records as not
+found. Only the authenticated `praetor-api` workload may assert this header.
+
 Response: `200 OK` with redacted metadata. This endpoint has no query parameter,
 header, role, or debug mode that reveals secret values or ciphertext.
 

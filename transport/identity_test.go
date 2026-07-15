@@ -29,8 +29,11 @@ func TestSPIFFEMapper(t *testing.T) {
 	}{
 		{"scheduler", "spiffe://praetor.local/workload/praetor-scheduler", credential.RoleScheduler, "praetor-scheduler", true},
 		{"executor", "spiffe://praetor.local/workload/praetor-executor/worker-7", credential.RoleExecutor, "praetor-executor:worker-7", true},
+		{"api", "spiffe://praetor.local/workload/praetor-api", credential.RoleAPI, "praetor-api", true},
+		{"operator", "spiffe://praetor.local/workload/praetor-secrets-operator", credential.RoleSecretsOperator, "praetor-secrets-operator", true},
+		{"auditor", "spiffe://praetor.local/workload/praetor-secrets-auditor", credential.RoleSecretsAuditor, "praetor-secrets-auditor", true},
 		{"wrong trust domain", "spiffe://other.local/workload/praetor-scheduler", "", "", false},
-		{"unknown workload", "spiffe://praetor.local/workload/praetor-api", "", "", false},
+		{"unknown workload", "spiffe://praetor.local/workload/unknown", "", "", false},
 		{"executor path escape", "spiffe://praetor.local/workload/praetor-executor/..", "", "", false},
 		{"executor slash", "spiffe://praetor.local/workload/praetor-executor/a/b", "", "", false},
 		{"query", "spiffe://praetor.local/workload/praetor-scheduler?role=executor", "", "", false},

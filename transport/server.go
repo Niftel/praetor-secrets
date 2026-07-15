@@ -16,6 +16,10 @@ import (
 )
 
 type CredentialService interface {
+	CreateContext(context.Context, credential.CreateRequest) (credential.Metadata, error)
+	GetContext(context.Context, string, string) (credential.Metadata, error)
+	ReplaceInputsContext(context.Context, credential.ReplaceInputsRequest) (credential.Metadata, error)
+	UpdateMetadataContext(context.Context, credential.UpdateMetadataRequest) (credential.Metadata, error)
 	RegisterBinding(context.Context, credential.WorkloadIdentity, credential.RegisterBindingRequest) (credential.Binding, error)
 	InspectBinding(context.Context, credential.WorkloadIdentity, string) (credential.Binding, error)
 	CancelBinding(context.Context, credential.WorkloadIdentity, credential.CancelBindingRequest) (credential.Binding, error)
@@ -93,6 +97,10 @@ func (server *Server) ServeHTTP(writer http.ResponseWriter, request *http.Reques
 	switch {
 	case request.Method == http.MethodGet && path == "/internal/v1/security-status":
 		server.securityStatus(writer, request, identity)
+	case request.Method == http.MethodPost && path == "/internal/v1/credentials":
+		server.createCredential(writer, request, identity)
+	case strings.HasPrefix(path, "/internal/v1/credentials/"):
+		server.credentialRoute(writer, request, identity, path)
 	case request.Method == http.MethodPost && path == "/internal/v1/run-bindings":
 		server.registerBinding(writer, request, identity)
 	case request.Method == http.MethodGet && strings.HasPrefix(path, "/internal/v1/run-bindings/"):
@@ -145,6 +153,14 @@ func requestOperation(method, path string) string {
 		return "run_binding_registered"
 	case method == http.MethodGet && path == "/internal/v1/security-status":
 		return "security_status_read"
+	case method == http.MethodPost && path == "/internal/v1/credentials":
+		return "credential_created"
+	case method == http.MethodGet && strings.HasPrefix(path, "/internal/v1/credentials/"):
+		return "credential_read"
+	case method == http.MethodPut && strings.HasSuffix(path, "/inputs"):
+		return "credential_inputs_replaced"
+	case method == http.MethodPatch && strings.HasPrefix(path, "/internal/v1/credentials/"):
+		return "credential_metadata_updated"
 	case method == http.MethodGet && strings.HasPrefix(path, "/internal/v1/run-bindings/"):
 		return "run_binding_inspected"
 	case method == http.MethodPost && strings.HasSuffix(path, "/cancel"):
@@ -157,7 +173,135 @@ func requestOperation(method, path string) string {
 }
 
 func transactionallyAudited(operation string) bool {
-	return operation == "run_binding_registered" || operation == "run_binding_canceled" || operation == "credential_resolved"
+	return operation == "run_binding_registered" || operation == "run_binding_canceled" || operation == "credential_resolved" || operation == "credential_created" || operation == "credential_inputs_replaced" || operation == "credential_metadata_updated"
+}
+
+type actorBody struct {
+	UserID                  string `json:"user_id"`
+	Username                string `json:"username,omitempty"`
+	AuthorizationDecisionID string `json:"authorization_decision_id,omitempty"`
+}
+
+func validActor(actor actorBody) bool {
+	combined := len(actor.UserID)
+	if actor.Username != "" {
+		combined += 1 + len(actor.Username)
+	}
+	return actor.UserID != "" && combined <= 255 && !strings.ContainsAny(actor.UserID+actor.Username+actor.AuthorizationDecisionID, "\x00\r\n") && len(actor.AuthorizationDecisionID) <= 255
+}
+func actorContext(ctx context.Context, actor actorBody) context.Context {
+	request, ok := audit.RequestFromContext(ctx)
+	if !ok {
+		return ctx
+	}
+	request.HumanActor = actor.UserID
+	if actor.Username != "" {
+		request.HumanActor = actor.UserID + ":" + actor.Username
+	}
+	return audit.WithRequest(ctx, request)
+}
+
+type createCredentialBody struct {
+	OrganizationID string            `json:"organization_id"`
+	Name           string            `json:"name"`
+	CredentialType string            `json:"credential_type"`
+	SchemaVersion  uint32            `json:"schema_version"`
+	Inputs         map[string]string `json:"inputs"`
+	Actor          actorBody         `json:"actor"`
+}
+
+func (server *Server) createCredential(writer http.ResponseWriter, request *http.Request, identity credential.WorkloadIdentity) {
+	if identity.Role != credential.RoleAPI {
+		writeProblem(writer, http.StatusForbidden, "operation_not_permitted")
+		return
+	}
+	var body createCredentialBody
+	if err := decodeJSON(request, &body); err != nil || !validActor(body.Actor) {
+		writeProblem(writer, http.StatusBadRequest, "invalid_request")
+		return
+	}
+	keys := request.Header.Values("Idempotency-Key")
+	if len(keys) != 1 || keys[0] == "" {
+		writeProblem(writer, http.StatusBadRequest, "invalid_request")
+		return
+	}
+	ctx := actorContext(request.Context(), body.Actor)
+	result, err := server.service.CreateContext(ctx, credential.CreateRequest{OrganizationID: body.OrganizationID, Name: body.Name, CredentialType: body.CredentialType, SchemaVersion: body.SchemaVersion, Inputs: body.Inputs, IdempotencyKey: keys[0]})
+	clear(body.Inputs)
+	if err != nil {
+		writeServiceProblem(writer, err)
+		return
+	}
+	writer.Header().Set("Location", "/internal/v1/credentials/"+result.ID)
+	writeJSON(writer, http.StatusCreated, result)
+}
+
+type replaceCredentialBody struct {
+	ExpectedVersion uint64            `json:"expected_version"`
+	Inputs          map[string]string `json:"inputs"`
+	Actor           actorBody         `json:"actor"`
+}
+type updateCredentialBody struct {
+	ExpectedVersion uint64    `json:"expected_version"`
+	Name            string    `json:"name"`
+	Actor           actorBody `json:"actor"`
+}
+
+func (server *Server) credentialRoute(writer http.ResponseWriter, request *http.Request, identity credential.WorkloadIdentity, path string) {
+	if identity.Role != credential.RoleAPI {
+		writeProblem(writer, http.StatusForbidden, "operation_not_permitted")
+		return
+	}
+	relative := strings.TrimPrefix(path, "/internal/v1/credentials/")
+	inputsRoute := strings.HasSuffix(relative, "/inputs")
+	credentialID := strings.TrimSuffix(relative, "/inputs")
+	if credentialID == "" || strings.Contains(credentialID, "/") {
+		writeProblem(writer, http.StatusNotFound, "resource_not_found")
+		return
+	}
+	organizationID := strings.TrimSpace(request.Header.Get("X-Praetor-Organization-ID"))
+	if organizationID == "" || len(organizationID) > 255 {
+		writeProblem(writer, http.StatusBadRequest, "invalid_request")
+		return
+	}
+	switch {
+	case request.Method == http.MethodGet && !inputsRoute:
+		result, err := server.service.GetContext(request.Context(), organizationID, credentialID)
+		if err != nil {
+			writeServiceProblem(writer, err)
+			return
+		}
+		writeJSON(writer, http.StatusOK, result)
+	case request.Method == http.MethodPut && inputsRoute:
+		var body replaceCredentialBody
+		if err := decodeJSON(request, &body); err != nil || !validActor(body.Actor) {
+			writeProblem(writer, http.StatusBadRequest, "invalid_request")
+			return
+		}
+		ctx := actorContext(request.Context(), body.Actor)
+		result, err := server.service.ReplaceInputsContext(ctx, credential.ReplaceInputsRequest{CredentialID: credentialID, OrganizationID: organizationID, ExpectedVersion: body.ExpectedVersion, Inputs: body.Inputs})
+		clear(body.Inputs)
+		if err != nil {
+			writeServiceProblem(writer, err)
+			return
+		}
+		writeJSON(writer, http.StatusOK, result)
+	case request.Method == http.MethodPatch && !inputsRoute:
+		var body updateCredentialBody
+		if err := decodeJSON(request, &body); err != nil || !validActor(body.Actor) {
+			writeProblem(writer, http.StatusBadRequest, "invalid_request")
+			return
+		}
+		ctx := actorContext(request.Context(), body.Actor)
+		result, err := server.service.UpdateMetadataContext(ctx, credential.UpdateMetadataRequest{CredentialID: credentialID, OrganizationID: organizationID, ExpectedVersion: body.ExpectedVersion, Name: body.Name})
+		if err != nil {
+			writeServiceProblem(writer, err)
+			return
+		}
+		writeJSON(writer, http.StatusOK, result)
+	default:
+		writeProblem(writer, http.StatusNotFound, "resource_not_found")
+	}
 }
 
 func requestRunID(path string) string {
@@ -332,6 +476,10 @@ func writeServiceProblem(writer http.ResponseWriter, err error) {
 		writeProblem(writer, http.StatusNotFound, "resource_not_found")
 	case errors.Is(err, credential.ErrBindingConflict):
 		writeProblem(writer, http.StatusConflict, "run_binding_conflict")
+	case errors.Is(err, credential.ErrIdempotencyConflict):
+		writeProblem(writer, http.StatusConflict, "idempotency_conflict")
+	case errors.Is(err, credential.ErrVersionConflict):
+		writeProblem(writer, http.StatusConflict, "version_conflict")
 	case errors.Is(err, credential.ErrAttemptConflict):
 		writeProblem(writer, http.StatusConflict, "attempt_conflict")
 	case errors.Is(err, credential.ErrStorage):

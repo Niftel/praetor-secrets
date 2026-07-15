@@ -11,6 +11,7 @@ import (
 
 type Request struct {
 	ID, WorkloadIdentity, Operation string
+	HumanActor                      string
 	StartedAt                       time.Time
 }
 type requestKey struct{}
@@ -32,7 +33,7 @@ func Completion(ctx context.Context, result, reason string, finished time.Time) 
 	} else if duration >= 10*time.Millisecond {
 		latency = "medium"
 	}
-	return Event{SchemaVersion: SchemaVersion, Timestamp: finished.UTC(), EventType: "request_completed", Operation: request.Operation, Result: result, ReasonCode: reason, WorkloadIdentity: request.WorkloadIdentity, RequestID: request.ID, LatencyClass: latency}
+	return Event{SchemaVersion: SchemaVersion, Timestamp: finished.UTC(), EventType: "request_completed", Operation: request.Operation, Result: result, ReasonCode: reason, WorkloadIdentity: request.WorkloadIdentity, HumanActor: request.HumanActor, RequestID: request.ID, LatencyClass: latency}
 }
 
 type Recorder struct {
