@@ -3,6 +3,7 @@ package credential
 import (
 	"context"
 	"sync"
+	"time"
 
 	"github.com/Niftel/praetor-secrets/envelope"
 )
@@ -11,6 +12,10 @@ type backend interface {
 	Create(context.Context, string, [32]byte, Metadata, envelope.Record) (Metadata, error)
 	Get(context.Context, string, string) (Metadata, envelope.Record, error)
 	Update(context.Context, string, string, uint64, Metadata, envelope.Record) (Metadata, error)
+	RegisterBinding(context.Context, bindingRegistration) (Binding, error)
+	GetBinding(context.Context, string) (Binding, error)
+	CancelBinding(context.Context, string, string, time.Time) (Binding, error)
+	ClaimResolution(context.Context, resolutionClaim, func(Binding, boundRecord) error) (Binding, time.Time, error)
 }
 
 type memoryCredential struct {
@@ -22,12 +27,16 @@ type memoryBackend struct {
 	mu          sync.RWMutex
 	credentials map[string]*memoryCredential
 	idempotency map[string]idempotencyEntry
+	bindings    map[string]*memoryBinding
+	attempts    map[string]memoryAttempt
 }
 
 func newMemoryBackend() *memoryBackend {
 	return &memoryBackend{
 		credentials: make(map[string]*memoryCredential),
 		idempotency: make(map[string]idempotencyEntry),
+		bindings:    make(map[string]*memoryBinding),
+		attempts:    make(map[string]memoryAttempt),
 	}
 }
 

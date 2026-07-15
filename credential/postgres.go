@@ -17,6 +17,9 @@ import (
 //go:embed migrations/001_credentials.sql
 var credentialMigration string
 
+//go:embed migrations/002_run_bindings.sql
+var runBindingMigration string
+
 var ErrStorage = errors.New("credential storage unavailable")
 
 type postgresBackend struct {
@@ -25,11 +28,11 @@ type postgresBackend struct {
 
 // NewPostgresManager creates the production credential manager. Migrations must
 // be applied explicitly during deployment before serving traffic.
-func NewPostgresManager(keys masterkey.Set, schemas SchemaRegistry, pool *pgxpool.Pool) (*Manager, error) {
+func NewPostgresManager(keys masterkey.Set, schemas SchemaRegistry, pool *pgxpool.Pool, injectors ...InjectorRegistry) (*Manager, error) {
 	if pool == nil {
 		return nil, ErrInvalidInput
 	}
-	manager, err := NewManager(keys, schemas)
+	manager, err := NewManager(keys, schemas, injectors...)
 	if err != nil {
 		return nil, err
 	}
@@ -57,16 +60,19 @@ func ApplyPostgresMigrations(ctx context.Context, pool *pgxpool.Pool) error {
     )`); err != nil {
 		return ErrStorage
 	}
-	var applied bool
-	if err := tx.QueryRow(ctx, "SELECT EXISTS (SELECT 1 FROM praetor_secrets_schema_migrations WHERE version = 1)").Scan(&applied); err != nil {
-		return ErrStorage
-	}
-	if !applied {
-		if _, err := tx.Exec(ctx, credentialMigration); err != nil {
+	for index, migration := range []string{credentialMigration, runBindingMigration} {
+		version := index + 1
+		var applied bool
+		if err := tx.QueryRow(ctx, "SELECT EXISTS (SELECT 1 FROM praetor_secrets_schema_migrations WHERE version = $1)", version).Scan(&applied); err != nil {
 			return ErrStorage
 		}
-		if _, err := tx.Exec(ctx, "INSERT INTO praetor_secrets_schema_migrations (version, applied_at) VALUES (1, $1)", time.Now().UTC()); err != nil {
-			return ErrStorage
+		if !applied {
+			if _, err := tx.Exec(ctx, migration); err != nil {
+				return ErrStorage
+			}
+			if _, err := tx.Exec(ctx, "INSERT INTO praetor_secrets_schema_migrations (version, applied_at) VALUES ($1, $2)", version, time.Now().UTC()); err != nil {
+				return ErrStorage
+			}
 		}
 	}
 	if err := tx.Commit(ctx); err != nil {

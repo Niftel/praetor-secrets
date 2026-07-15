@@ -13,8 +13,8 @@ Development is tracked in the private
 
 Core service implementation is underway. The envelope format, strict
 file-backed master-key loader, redacted credential lifecycle, and transactional
-PostgreSQL persistence are implemented; transport and run-scoped resolution
-follow.
+PostgreSQL persistence are implemented. The run-binding and executor-resolution
+domain is implemented; authenticated transport follows.
 
 - [Threat model](docs/threat-model.md)
 - [Service API and trust-boundary specification](docs/service-api.md)
@@ -52,6 +52,20 @@ organization's idempotency key.
 `ApplyPostgresMigrations` must complete before the service accepts traffic. The
 application database role should own only this service's database objects and
 must not be shared with Praetor API, scheduler, or executor workloads.
+
+## Run-scoped resolution
+
+The scheduler registers an immutable run binding that snapshots one credential
+version and exact executor workload identity. Executors resolve by run ID and
+attempt ID only; they cannot submit a credential, organization, version, field,
+injector, or output path. PostgreSQL atomically enforces time windows,
+cancellation, executor matching, attempt replay, and resolution limits.
+
+Credential inputs pass through a versioned injector registry. The result is
+restricted to validated environment names and logical files with mode `0600`.
+Failed decryption, authentication, or injector validation rolls back the attempt
+and does not consume a resolution. Production transport must construct workload
+identities exclusively from verified mTLS certificates, never request headers.
 
 ## Core invariants
 
