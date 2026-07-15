@@ -53,7 +53,10 @@ func TestRuntimeBootsWithDatabaseAndMTLS(t *testing.T) {
 		ListenAddress: "127.0.0.1:0", HealthListenAddress: "127.0.0.1:0", TrustDomain: "praetor.local",
 		DatabaseURLFile: databaseFile, MasterKeyFile: masterFile, AuditKeyFile: auditFile, TLSCertificateFile: serverCertFile,
 		TLSPrivateKeyFile: serverKeyFile, ClientCAFile: caFile, ShutdownTimeout: 2 * time.Second,
+		AuditSinkURL: "https://audit.invalid/events", AuditSinkCAFile: caFile,
+		AuditSinkCertificateFile: serverCertFile, AuditSinkPrivateKeyFile: serverKeyFile,
 		MaxDatabaseConns: 2, MaxNetworkConns: 4, MaxPendingAuditEvents: 100,
+		AuditDeliveryBatchSize: 10, AuditDeliveryPollInterval: time.Second, AuditDeliveryRequestTimeout: time.Second,
 	}
 	runtime, err := Build(ctx, config)
 	if err != nil {

@@ -36,6 +36,7 @@ type Runtime struct {
 	addressMu     sync.RWMutex
 	mainAddress   string
 	healthAddress string
+	auditWorker   *audit.DeliveryWorker
 }
 
 func Build(ctx context.Context, config Config) (*Runtime, error) {
@@ -82,6 +83,29 @@ func Build(ctx context.Context, config Config) (*Runtime, error) {
 	if err != nil {
 		return nil, ErrStartup
 	}
+	if err := requireRestrictedFile(config.AuditSinkPrivateKeyFile); err != nil {
+		return nil, ErrStartup
+	}
+	sinkCertificate, err := tls.LoadX509KeyPair(config.AuditSinkCertificateFile, config.AuditSinkPrivateKeyFile)
+	if err != nil || len(sinkCertificate.Certificate) == 0 {
+		return nil, ErrStartup
+	}
+	sinkLeaf, err := x509.ParseCertificate(sinkCertificate.Certificate[0])
+	if err != nil || time.Now().Before(sinkLeaf.NotBefore) || !time.Now().Before(sinkLeaf.NotAfter) {
+		return nil, ErrStartup
+	}
+	sinkCAPEM, err := readBounded(config.AuditSinkCAFile, maxCertificateBytes)
+	if err != nil {
+		return nil, ErrStartup
+	}
+	sinkRoots := x509.NewCertPool()
+	if !sinkRoots.AppendCertsFromPEM(sinkCAPEM) {
+		return nil, ErrStartup
+	}
+	sink, err := audit.NewHTTPSink(config.AuditSinkURL, &tls.Config{MinVersion: tls.VersionTLS13, RootCAs: sinkRoots, Certificates: []tls.Certificate{sinkCertificate}})
+	if err != nil {
+		return nil, ErrStartup
+	}
 
 	poolConfig, err := pgxpool.ParseConfig(databaseURL)
 	if err != nil {
@@ -115,6 +139,10 @@ func Build(ctx context.Context, config Config) (*Runtime, error) {
 	if err := manager.RequireAuditSpool(auditSpool); err != nil {
 		return nil, ErrStartup
 	}
+	auditWorker, err := audit.NewDeliveryWorker(auditSpool, pool, sink, audit.DeliveryConfig{BatchSize: config.AuditDeliveryBatchSize, PollInterval: config.AuditDeliveryPollInterval, RequestTimeout: config.AuditDeliveryRequestTimeout})
+	if err != nil {
+		return nil, ErrStartup
+	}
 	handler, err := transport.NewServer(manager, transport.SPIFFEMapper{TrustDomain: config.TrustDomain})
 	if err != nil {
 		return nil, ErrStartup
@@ -123,7 +151,7 @@ func Build(ctx context.Context, config Config) (*Runtime, error) {
 	if err != nil {
 		return nil, ErrStartup
 	}
-	runtime := &Runtime{config: config, pool: pool, mainServer: mainServer}
+	runtime := &Runtime{config: config, pool: pool, mainServer: mainServer, auditWorker: auditWorker}
 	runtime.healthServer = &http.Server{
 		Addr: config.HealthListenAddress, Handler: runtime.healthHandler(),
 		ReadHeaderTimeout: 2 * time.Second, ReadTimeout: 3 * time.Second,
@@ -151,9 +179,14 @@ func (runtime *Runtime) Run(ctx context.Context) error {
 	runtime.setAddresses(mainListener.Addr().String(), healthListener.Addr().String())
 	limited := newLimitListener(mainListener, runtime.config.MaxNetworkConns)
 	tlsListener := tls.NewListener(limited, runtime.mainServer.TLSConfig)
-	errorsChannel := make(chan error, 2)
-	go func() { errorsChannel <- runtime.mainServer.Serve(tlsListener) }()
-	go func() { errorsChannel <- runtime.healthServer.Serve(healthListener) }()
+	runContext, cancelRun := context.WithCancel(ctx)
+	defer cancelRun()
+	errorsChannel := make(chan error, 3)
+	var workers sync.WaitGroup
+	workers.Add(3)
+	go func() { defer workers.Done(); errorsChannel <- runtime.mainServer.Serve(tlsListener) }()
+	go func() { defer workers.Done(); errorsChannel <- runtime.healthServer.Serve(healthListener) }()
+	go func() { defer workers.Done(); errorsChannel <- runtime.auditWorker.Run(runContext) }()
 	runtime.ready.Store(true)
 
 	var serveError error
@@ -165,10 +198,12 @@ func (runtime *Runtime) Run(ctx context.Context) error {
 		}
 	}
 	runtime.ready.Store(false)
+	cancelRun()
 	shutdownContext, cancel := context.WithTimeout(context.Background(), runtime.config.ShutdownTimeout)
 	defer cancel()
 	mainError := runtime.mainServer.Shutdown(shutdownContext)
 	healthError := runtime.healthServer.Shutdown(shutdownContext)
+	workers.Wait()
 	runtime.pool.Close()
 	if serveError != nil || mainError != nil || healthError != nil {
 		return ErrServe

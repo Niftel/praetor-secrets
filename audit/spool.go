@@ -169,7 +169,7 @@ func (spool *Spool) Pending(ctx context.Context, pool *pgxpool.Pool, limit int) 
 	if spool == nil || pool == nil || limit < 1 || limit > 1000 {
 		return nil, ErrAudit
 	}
-	rows, err := pool.Query(ctx, `SELECT sequence,event,mac FROM audit_spool WHERE delivered_at IS NULL ORDER BY sequence LIMIT $1`, limit)
+	rows, err := pool.Query(ctx, `SELECT sequence,event,previous_mac,mac FROM audit_spool WHERE delivered_at IS NULL ORDER BY sequence LIMIT $1`, limit)
 	if err != nil {
 		return nil, ErrAudit
 	}
@@ -177,14 +177,28 @@ func (spool *Spool) Pending(ctx context.Context, pool *pgxpool.Pool, limit int) 
 	var records []Record
 	for rows.Next() {
 		var record Record
-		var encoded []byte
-		if err := rows.Scan(&record.Sequence, &encoded, &record.MAC); err != nil || json.Unmarshal(encoded, &record.Event) != nil {
+		var encoded, previous []byte
+		if err := rows.Scan(&record.Sequence, &encoded, &previous, &record.MAC); err != nil || json.Unmarshal(encoded, &record.Event) != nil {
+			return nil, ErrAudit
+		}
+		canonical, err := json.Marshal(record.Event)
+		if err != nil || !hmac.Equal(record.MAC, spool.authenticate(record.Sequence, previous, canonical)) {
 			return nil, ErrAudit
 		}
 		records = append(records, record)
 	}
 	if rows.Err() != nil {
 		return nil, ErrAudit
+	}
+	var headSequence, lastSequence int64
+	var headMAC, lastMAC []byte
+	if err := pool.QueryRow(ctx, `SELECT last_sequence,last_mac FROM audit_chain_state WHERE singleton=true`).Scan(&headSequence, &headMAC); err != nil {
+		return nil, ErrAudit
+	}
+	if headSequence > 0 {
+		if err := pool.QueryRow(ctx, `SELECT sequence,mac FROM audit_spool ORDER BY sequence DESC LIMIT 1`).Scan(&lastSequence, &lastMAC); err != nil || headSequence != lastSequence || !hmac.Equal(headMAC, lastMAC) {
+			return nil, ErrAudit
+		}
 	}
 	return records, nil
 }
