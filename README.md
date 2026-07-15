@@ -11,12 +11,24 @@ Development is tracked in the private
 
 ## Current phase
 
-The project is in security design. Implementation begins only after the threat
-model and service API specification have been reviewed.
+Core service implementation is underway. The envelope format and strict
+file-backed master-key loader are implemented; credential lifecycle and
+run-scoped resolution follow.
 
 - [Threat model](docs/threat-model.md)
 - [Service API and trust-boundary specification](docs/service-api.md)
 - [Envelope record format](docs/envelope-format.md)
+
+## Master-key files
+
+The service reads an exact 32-byte binary key from a read-only file. The file
+must not grant permissions to group or other users (use mode `0400` or `0600`).
+Do not add a newline or store hex/base64 text in the file.
+
+During a bounded rotation window, a separate previous-key file may be mounted.
+Only the current key is used for new encryption; the previous key is accepted
+for decryption until all records have been rewrapped and verified. The previous
+file must then be removed.
 
 ## Core invariants
 
