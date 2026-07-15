@@ -31,13 +31,17 @@ var (
 	ErrInvalidInput        = errors.New("invalid credential input")
 	ErrNotFound            = errors.New("credential not found")
 	ErrVersionConflict     = errors.New("credential version conflict")
+	ErrCredentialNotActive = errors.New("credential is not active")
 	ErrIdempotencyConflict = errors.New("idempotency key conflict")
 	ErrEncryption          = errors.New("credential encryption failed")
 )
 
 type State string
 
-const StateActive State = "active"
+const (
+	StateActive  State = "active"
+	StateRetired State = "retired"
+)
 
 // Metadata is the complete administrative read model. It cannot represent
 // plaintext or ciphertext, so both are structurally excluded from responses.
@@ -75,6 +79,12 @@ type UpdateMetadataRequest struct {
 	OrganizationID  string
 	ExpectedVersion uint64
 	Name            string
+}
+
+type RetireRequest struct {
+	CredentialID    string
+	OrganizationID  string
+	ExpectedVersion uint64
 }
 
 // SchemaRegistry is the reviewed boundary between credential-type ownership
@@ -182,6 +192,9 @@ func (m *Manager) ReplaceInputsContext(ctx context.Context, request ReplaceInput
 	if current.Version != request.ExpectedVersion {
 		return Metadata{}, ErrVersionConflict
 	}
+	if current.State != StateActive {
+		return Metadata{}, ErrCredentialNotActive
+	}
 	secretFields, err := m.validateSchema(current.CredentialType, current.SchemaVersion, request.Inputs)
 	if err != nil {
 		return Metadata{}, err
@@ -214,6 +227,9 @@ func (m *Manager) UpdateMetadataContext(ctx context.Context, request UpdateMetad
 	if current.Version != request.ExpectedVersion {
 		return Metadata{}, ErrVersionConflict
 	}
+	if current.State != StateActive {
+		return Metadata{}, ErrCredentialNotActive
+	}
 	if current.Name == request.Name {
 		return cloneMetadata(current), nil
 	}
@@ -238,6 +254,51 @@ func (m *Manager) UpdateMetadataContext(ctx context.Context, request UpdateMetad
 		return Metadata{}, err
 	}
 	return m.backend.Update(ctx, request.OrganizationID, request.CredentialID, request.ExpectedVersion, next, record, "credential_metadata_updated")
+}
+
+func (m *Manager) Retire(request RetireRequest) (Metadata, error) {
+	return m.RetireContext(context.Background(), request)
+}
+
+// RetireContext prevents new bindings without destroying versions that an
+// already-authorized run or retention policy may still require. Replays are
+// idempotent: once retired, the current redacted metadata is returned.
+func (m *Manager) RetireContext(ctx context.Context, request RetireRequest) (Metadata, error) {
+	if request.CredentialID == "" || request.OrganizationID == "" || request.ExpectedVersion == 0 {
+		return Metadata{}, ErrInvalidInput
+	}
+	current, currentRecord, err := m.backend.Get(ctx, request.OrganizationID, request.CredentialID)
+	if err != nil {
+		return Metadata{}, err
+	}
+	if current.State == StateRetired {
+		return cloneMetadata(current), nil
+	}
+	if current.State != StateActive {
+		return Metadata{}, ErrCredentialNotActive
+	}
+	if current.Version != request.ExpectedVersion {
+		return Metadata{}, ErrVersionConflict
+	}
+	plaintext, err := envelope.Decrypt(currentRecord, envelopeContext(current), m.keys.Keyring())
+	if err != nil {
+		return Metadata{}, ErrEncryption
+	}
+	defer wipe(plaintext)
+	var inputs map[string]string
+	if err := json.Unmarshal(plaintext, &inputs); err != nil {
+		return Metadata{}, ErrEncryption
+	}
+	next := cloneMetadata(current)
+	next.Version++
+	next.State = StateRetired
+	next.UpdatedAt = m.now()
+	record, err := m.encrypt(next, inputs)
+	clear(inputs)
+	if err != nil {
+		return Metadata{}, err
+	}
+	return m.backend.Update(ctx, request.OrganizationID, request.CredentialID, request.ExpectedVersion, next, record, "credential_retired")
 }
 
 func (m *Manager) encrypt(metadata Metadata, inputs map[string]string) (envelope.Record, error) {

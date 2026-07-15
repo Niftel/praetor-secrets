@@ -20,6 +20,7 @@ type CredentialService interface {
 	GetContext(context.Context, string, string) (credential.Metadata, error)
 	ReplaceInputsContext(context.Context, credential.ReplaceInputsRequest) (credential.Metadata, error)
 	UpdateMetadataContext(context.Context, credential.UpdateMetadataRequest) (credential.Metadata, error)
+	RetireContext(context.Context, credential.RetireRequest) (credential.Metadata, error)
 	RegisterBinding(context.Context, credential.WorkloadIdentity, credential.RegisterBindingRequest) (credential.Binding, error)
 	InspectBinding(context.Context, credential.WorkloadIdentity, string) (credential.Binding, error)
 	CancelBinding(context.Context, credential.WorkloadIdentity, credential.CancelBindingRequest) (credential.Binding, error)
@@ -161,6 +162,8 @@ func requestOperation(method, path string) string {
 		return "credential_inputs_replaced"
 	case method == http.MethodPatch && strings.HasPrefix(path, "/internal/v1/credentials/"):
 		return "credential_metadata_updated"
+	case method == http.MethodPost && strings.HasSuffix(path, "/retire"):
+		return "credential_retired"
 	case method == http.MethodGet && strings.HasPrefix(path, "/internal/v1/run-bindings/"):
 		return "run_binding_inspected"
 	case method == http.MethodPost && strings.HasSuffix(path, "/cancel"):
@@ -173,7 +176,7 @@ func requestOperation(method, path string) string {
 }
 
 func transactionallyAudited(operation string) bool {
-	return operation == "run_binding_registered" || operation == "run_binding_canceled" || operation == "credential_resolved" || operation == "credential_created" || operation == "credential_inputs_replaced" || operation == "credential_metadata_updated"
+	return operation == "run_binding_registered" || operation == "run_binding_canceled" || operation == "credential_resolved" || operation == "credential_created" || operation == "credential_inputs_replaced" || operation == "credential_metadata_updated" || operation == "credential_retired"
 }
 
 type actorBody struct {
@@ -246,6 +249,10 @@ type updateCredentialBody struct {
 	Name            string    `json:"name"`
 	Actor           actorBody `json:"actor"`
 }
+type retireCredentialBody struct {
+	ExpectedVersion uint64    `json:"expected_version"`
+	Actor           actorBody `json:"actor"`
+}
 
 func (server *Server) credentialRoute(writer http.ResponseWriter, request *http.Request, identity credential.WorkloadIdentity, path string) {
 	if identity.Role != credential.RoleAPI {
@@ -254,7 +261,8 @@ func (server *Server) credentialRoute(writer http.ResponseWriter, request *http.
 	}
 	relative := strings.TrimPrefix(path, "/internal/v1/credentials/")
 	inputsRoute := strings.HasSuffix(relative, "/inputs")
-	credentialID := strings.TrimSuffix(relative, "/inputs")
+	retireRoute := strings.HasSuffix(relative, "/retire")
+	credentialID := strings.TrimSuffix(strings.TrimSuffix(relative, "/inputs"), "/retire")
 	if credentialID == "" || strings.Contains(credentialID, "/") {
 		writeProblem(writer, http.StatusNotFound, "resource_not_found")
 		return
@@ -265,7 +273,7 @@ func (server *Server) credentialRoute(writer http.ResponseWriter, request *http.
 		return
 	}
 	switch {
-	case request.Method == http.MethodGet && !inputsRoute:
+	case request.Method == http.MethodGet && !inputsRoute && !retireRoute:
 		result, err := server.service.GetContext(request.Context(), organizationID, credentialID)
 		if err != nil {
 			writeServiceProblem(writer, err)
@@ -286,7 +294,7 @@ func (server *Server) credentialRoute(writer http.ResponseWriter, request *http.
 			return
 		}
 		writeJSON(writer, http.StatusOK, result)
-	case request.Method == http.MethodPatch && !inputsRoute:
+	case request.Method == http.MethodPatch && !inputsRoute && !retireRoute:
 		var body updateCredentialBody
 		if err := decodeJSON(request, &body); err != nil || !validActor(body.Actor) {
 			writeProblem(writer, http.StatusBadRequest, "invalid_request")
@@ -294,6 +302,19 @@ func (server *Server) credentialRoute(writer http.ResponseWriter, request *http.
 		}
 		ctx := actorContext(request.Context(), body.Actor)
 		result, err := server.service.UpdateMetadataContext(ctx, credential.UpdateMetadataRequest{CredentialID: credentialID, OrganizationID: organizationID, ExpectedVersion: body.ExpectedVersion, Name: body.Name})
+		if err != nil {
+			writeServiceProblem(writer, err)
+			return
+		}
+		writeJSON(writer, http.StatusOK, result)
+	case request.Method == http.MethodPost && retireRoute:
+		var body retireCredentialBody
+		if err := decodeJSON(request, &body); err != nil || !validActor(body.Actor) {
+			writeProblem(writer, http.StatusBadRequest, "invalid_request")
+			return
+		}
+		ctx := actorContext(request.Context(), body.Actor)
+		result, err := server.service.RetireContext(ctx, credential.RetireRequest{CredentialID: credentialID, OrganizationID: organizationID, ExpectedVersion: body.ExpectedVersion})
 		if err != nil {
 			writeServiceProblem(writer, err)
 			return
@@ -480,6 +501,8 @@ func writeServiceProblem(writer http.ResponseWriter, err error) {
 		writeProblem(writer, http.StatusConflict, "idempotency_conflict")
 	case errors.Is(err, credential.ErrVersionConflict):
 		writeProblem(writer, http.StatusConflict, "version_conflict")
+	case errors.Is(err, credential.ErrCredentialNotActive):
+		writeProblem(writer, http.StatusConflict, "credential_not_active")
 	case errors.Is(err, credential.ErrAttemptConflict):
 		writeProblem(writer, http.StatusConflict, "attempt_conflict")
 	case errors.Is(err, credential.ErrStorage):

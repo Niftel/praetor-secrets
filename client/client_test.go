@@ -128,6 +128,18 @@ func TestUpdateAndCancellationContracts(t *testing.T) {
 	}
 
 	client = testClient(t, func(request *http.Request, body string) {
+		if request.Method != http.MethodPost || !strings.HasSuffix(request.URL.Path, "/retire") || request.Header.Get("X-Praetor-Organization-ID") != "5" ||
+			!strings.Contains(body, `"expected_version":2`) || !strings.Contains(body, `"user_id":"42"`) {
+			t.Fatalf("unexpected retirement request: %s %s %s", request.Method, request.URL.Path, body)
+		}
+	})
+	if _, err := client.RetireCredential(context.Background(), RetireCredentialRequest{
+		OrganizationID: "5", CredentialID: "4b152888-54a6-4f85-8ed1-8e66498db245", ExpectedVersion: 2, Actor: Actor{UserID: "42"},
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	client = testClient(t, func(request *http.Request, body string) {
 		if request.Method != http.MethodPost || !strings.HasSuffix(request.URL.Path, "/cancel") || !strings.Contains(body, `"reason":"job_canceled"`) {
 			t.Fatalf("unexpected cancel request: %s %s", request.URL.Path, body)
 		}

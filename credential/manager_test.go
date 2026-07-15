@@ -193,6 +193,46 @@ func TestMetadataUpdateReencryptsAsNewCredentialVersion(t *testing.T) {
 	}
 }
 
+func TestRetireIsVersionedIdempotentAndBlocksMutation(t *testing.T) {
+	manager := newTestManager(t)
+	created, err := manager.Create(validCreate())
+	if err != nil {
+		t.Fatal(err)
+	}
+	retired, err := manager.Retire(RetireRequest{CredentialID: created.ID, OrganizationID: "org-5", ExpectedVersion: 1})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if retired.State != StateRetired || retired.Version != 2 || len(testMemory(t, manager).credentials[created.ID].records) != 2 {
+		t.Fatalf("credential was not retired as a new version: %+v", retired)
+	}
+	replayed, err := manager.Retire(RetireRequest{CredentialID: created.ID, OrganizationID: "org-5", ExpectedVersion: 1})
+	if err != nil || replayed.Version != retired.Version || len(testMemory(t, manager).credentials[created.ID].records) != 2 {
+		t.Fatalf("retirement replay was not idempotent: metadata=%+v err=%v", replayed, err)
+	}
+	if _, err := manager.ReplaceInputs(ReplaceInputsRequest{CredentialID: created.ID, OrganizationID: "org-5", ExpectedVersion: 2, Inputs: map[string]string{"username": "x", "password": "y"}}); !errors.Is(err, ErrCredentialNotActive) {
+		t.Fatalf("retired credential accepted input replacement: %v", err)
+	}
+	if _, err := manager.UpdateMetadata(UpdateMetadataRequest{CredentialID: created.ID, OrganizationID: "org-5", ExpectedVersion: 2, Name: "renamed"}); !errors.Is(err, ErrCredentialNotActive) {
+		t.Fatalf("retired credential accepted metadata update: %v", err)
+	}
+}
+
+func TestRetireVersionConflictDoesNotChangeState(t *testing.T) {
+	manager := newTestManager(t)
+	created, err := manager.Create(validCreate())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := manager.Retire(RetireRequest{CredentialID: created.ID, OrganizationID: "org-5", ExpectedVersion: 2}); !errors.Is(err, ErrVersionConflict) {
+		t.Fatalf("expected version conflict, got %v", err)
+	}
+	current, err := manager.Get("org-5", created.ID)
+	if err != nil || current.State != StateActive || current.Version != 1 || len(testMemory(t, manager).credentials[created.ID].records) != 1 {
+		t.Fatalf("conflict changed credential: metadata=%+v err=%v", current, err)
+	}
+}
+
 func TestCreateIdempotency(t *testing.T) {
 	manager := newTestManager(t)
 	first, err := manager.Create(validCreate())

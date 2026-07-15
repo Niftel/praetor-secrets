@@ -184,6 +184,24 @@ func (client *Client) UpdateMetadata(ctx context.Context, input UpdateMetadataRe
 	return result, err
 }
 
+type RetireCredentialRequest struct {
+	OrganizationID  string
+	CredentialID    string
+	ExpectedVersion uint64
+	Actor           Actor
+}
+
+func (client *Client) RetireCredential(ctx context.Context, input RetireCredentialRequest) (credential.Metadata, error) {
+	body := struct {
+		ExpectedVersion uint64 `json:"expected_version"`
+		Actor           Actor  `json:"actor"`
+	}{input.ExpectedVersion, input.Actor}
+	var result credential.Metadata
+	err := client.do(ctx, http.MethodPost, "/internal/v1/credentials/"+url.PathEscape(input.CredentialID)+"/retire", body,
+		map[string]string{"X-Praetor-Organization-ID": input.OrganizationID}, &result, http.StatusOK)
+	return result, err
+}
+
 func (client *Client) RegisterBinding(ctx context.Context, input credential.RegisterBindingRequest) (credential.Binding, error) {
 	body := struct {
 		RunID            string    `json:"run_id"`

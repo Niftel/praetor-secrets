@@ -101,6 +101,34 @@ func TestRunScopedResolutionSnapshotsCredentialVersion(t *testing.T) {
 	}
 }
 
+func TestRetirementBlocksNewBindingsButPreservesExistingBinding(t *testing.T) {
+	manager, now := resolutionManager(t)
+	created, err := manager.Create(validCreate())
+	if err != nil {
+		t.Fatal(err)
+	}
+	binding, err := manager.RegisterBinding(context.Background(), schedulerIdentity(), testBinding(*now, created.ID))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := manager.Retire(RetireRequest{CredentialID: created.ID, OrganizationID: "org-5", ExpectedVersion: 1}); err != nil {
+		t.Fatal(err)
+	}
+	newBinding := testBinding(*now, created.ID)
+	newBinding.RunID = "42b9fc25-fd71-47e6-b0e8-45db87df9f65"
+	newBinding.DispatchID = "be8d16d8-e58d-4ec3-953a-4ddd10c65962"
+	newBinding.IdempotencyKey = "binding-request-2"
+	if _, err := manager.RegisterBinding(context.Background(), schedulerIdentity(), newBinding); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("retired credential accepted a new binding: %v", err)
+	}
+	resolved, err := manager.Resolve(context.Background(), executorIdentity("worker-7"), ResolveRequest{
+		RunID: binding.RunID, AttemptID: "61024db7-0db8-446a-b049-dd9d172cde97", RequestedAt: *now,
+	})
+	if err != nil || resolved.Environment["ANSIBLE_REMOTE_USER"] != "automation" {
+		t.Fatalf("existing binding did not retain its pinned version: result=%+v err=%v", resolved, err)
+	}
+}
+
 func TestResolutionRejectsWrongExecutorReplayAndExhaustion(t *testing.T) {
 	manager, now := resolutionManager(t)
 	created, _ := manager.Create(validCreate())

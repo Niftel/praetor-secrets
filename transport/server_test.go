@@ -50,6 +50,9 @@ func (service *fakeService) ReplaceInputsContext(_ context.Context, request cred
 func (service *fakeService) UpdateMetadataContext(_ context.Context, request credential.UpdateMetadataRequest) (credential.Metadata, error) {
 	return credential.Metadata{ID: request.CredentialID, OrganizationID: request.OrganizationID, Name: request.Name, Version: request.ExpectedVersion + 1}, service.err
 }
+func (service *fakeService) RetireContext(_ context.Context, request credential.RetireRequest) (credential.Metadata, error) {
+	return credential.Metadata{ID: request.CredentialID, OrganizationID: request.OrganizationID, Version: request.ExpectedVersion + 1, State: credential.StateRetired}, service.err
+}
 
 func (service *fakeService) RegisterBinding(_ context.Context, caller credential.WorkloadIdentity, request credential.RegisterBindingRequest) (credential.Binding, error) {
 	service.caller, service.registration = caller, request
@@ -351,6 +354,26 @@ func TestCredentialReplacementRenameAndValidation(t *testing.T) {
 	server.ServeHTTP(recorder, request)
 	if recorder.Code != http.StatusNotFound {
 		t.Fatalf("unsupported method status=%d", recorder.Code)
+	}
+}
+
+func TestCredentialRetirementRouteIsAPIOnly(t *testing.T) {
+	server := newTestServer(t, &fakeService{})
+	path := "/internal/v1/credentials/98d977e4-3f0a-44cd-81cb-8965d5522996/retire"
+	body := `{"expected_version":3,"actor":{"user_id":"104","username":"operator"}}`
+	request := verifiedRequest(t, http.MethodPost, path, body, "spiffe://praetor.local/workload/praetor-api")
+	request.Header.Set("X-Praetor-Organization-ID", "5")
+	recorder := httptest.NewRecorder()
+	server.ServeHTTP(recorder, request)
+	if recorder.Code != http.StatusOK || !strings.Contains(recorder.Body.String(), `"state":"retired"`) || !strings.Contains(recorder.Body.String(), `"version":4`) {
+		t.Fatalf("retire status=%d body=%s", recorder.Code, recorder.Body.String())
+	}
+	request = verifiedRequest(t, http.MethodPost, path, body, "spiffe://praetor.local/workload/praetor-scheduler")
+	request.Header.Set("X-Praetor-Organization-ID", "5")
+	recorder = httptest.NewRecorder()
+	server.ServeHTTP(recorder, request)
+	if recorder.Code != http.StatusForbidden {
+		t.Fatalf("scheduler retirement status=%d", recorder.Code)
 	}
 }
 
