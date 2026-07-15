@@ -14,8 +14,9 @@ Development is tracked in the private
 Core service implementation is underway. The envelope format, strict
 file-backed master-key loader, redacted credential lifecycle, and transactional
 PostgreSQL persistence are implemented. The run-binding and executor-resolution
-domain, authenticated internal transport, and executable service assembly are
-implemented; audit delivery and Praetor integration follow.
+domain, authenticated internal transport, executable service assembly, and the
+authenticated durable audit spool are implemented; remote audit-sink delivery
+and Praetor integration follow.
 
 - [Threat model](docs/threat-model.md)
 - [Service API and trust-boundary specification](docs/service-api.md)
@@ -99,6 +100,7 @@ Required environment variables:
 | `PRAETOR_SECRETS_TRUST_DOMAIN` | SPIFFE trust domain |
 | `PRAETOR_SECRETS_DATABASE_URL_FILE` | restricted file containing the PostgreSQL URL |
 | `PRAETOR_SECRETS_MASTER_KEY_FILE` | restricted current 32-byte master-key file |
+| `PRAETOR_SECRETS_AUDIT_KEY_FILE` | restricted 32-byte audit-chain authentication key |
 | `PRAETOR_SECRETS_TLS_CERTIFICATE_FILE` | server certificate chain |
 | `PRAETOR_SECRETS_TLS_PRIVATE_KEY_FILE` | restricted server private-key file |
 | `PRAETOR_SECRETS_CLIENT_CA_FILE` | CA used to authenticate workload clients |
@@ -107,11 +109,26 @@ Required environment variables:
 Optional bounded resource settings are `PRAETOR_SECRETS_SHUTDOWN_TIMEOUT`
 (default `20s`), `PRAETOR_SECRETS_MAX_DATABASE_CONNECTIONS` (default `10`),
 and `PRAETOR_SECRETS_MAX_NETWORK_CONNECTIONS` (default `100`).
+`PRAETOR_SECRETS_MAX_PENDING_AUDIT_EVENTS` bounds the durable undelivered
+audit queue (default `100000`); once full, sensitive mutations fail closed.
 
 The health listener exposes `GET /livez` and `GET /readyz`. It carries no
 credential routes and should remain restricted to the cluster health-check
 network. Readiness is reported only while the API listener is running and the
 database responds.
+
+## Audit spool
+
+Every PostgreSQL security-state mutation requires an audit spool append in the
+same transaction. If the spool is unavailable, invalid, or at its configured
+pending-event bound, the state change rolls back. Events use a fixed,
+value-free schema and form an HMAC-SHA-256 chain authenticated by the separate
+audit key. Startup migrations make event content and chain fields immutable;
+only an exact-MAC delivery acknowledgement may set `delivered_at`.
+
+The spool verifies the complete chain and durable head before delivery. Remote
+sink delivery is intentionally a separate component so sink downtime does not
+block mutations until the bounded local spool is exhausted.
 
 ## Core invariants
 

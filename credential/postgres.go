@@ -8,6 +8,7 @@ import (
 	"errors"
 	"time"
 
+	"github.com/Niftel/praetor-secrets/audit"
 	"github.com/Niftel/praetor-secrets/envelope"
 	"github.com/Niftel/praetor-secrets/masterkey"
 	"github.com/jackc/pgx/v5"
@@ -23,7 +24,30 @@ var runBindingMigration string
 var ErrStorage = errors.New("credential storage unavailable")
 
 type postgresBackend struct {
-	pool *pgxpool.Pool
+	pool  *pgxpool.Pool
+	audit *audit.Spool
+}
+
+// RequireAuditSpool enables fail-closed transactional auditing for every
+// security-sensitive PostgreSQL mutation. Production assembly must call it
+// before serving requests.
+func (m *Manager) RequireAuditSpool(spool *audit.Spool) error {
+	backend, ok := m.backend.(*postgresBackend)
+	if !ok || spool == nil {
+		return ErrInvalidInput
+	}
+	backend.audit = spool
+	return nil
+}
+
+func (b *postgresBackend) appendAudit(ctx context.Context, tx pgx.Tx, event audit.Event) error {
+	if b.audit == nil {
+		return ErrStorage
+	}
+	if err := b.audit.AppendTx(ctx, tx, event); err != nil {
+		return ErrStorage
+	}
+	return nil
 }
 
 // NewPostgresManager creates the production credential manager. Migrations must
@@ -142,6 +166,9 @@ func (b *postgresBackend) Create(ctx context.Context, idempotencyID string, dige
 		organizationID, idempotencyKey, digest[:], metadataJSON, metadata.ID, metadata.CreatedAt); err != nil {
 		return Metadata{}, ErrStorage
 	}
+	if err := b.appendAudit(ctx, tx, credentialAudit("credential_created", metadata)); err != nil {
+		return Metadata{}, err
+	}
 	if err := tx.Commit(ctx); err != nil {
 		return Metadata{}, ErrStorage
 	}
@@ -173,7 +200,7 @@ func (b *postgresBackend) Get(ctx context.Context, organizationID, credentialID 
 	return metadata, record, nil
 }
 
-func (b *postgresBackend) Update(ctx context.Context, organizationID, credentialID string, expectedVersion uint64, metadata Metadata, record envelope.Record) (Metadata, error) {
+func (b *postgresBackend) Update(ctx context.Context, organizationID, credentialID string, expectedVersion uint64, metadata Metadata, record envelope.Record, operation string) (Metadata, error) {
 	_, recordJSON, err := encodeStorage(metadata, record)
 	if err != nil {
 		return Metadata{}, ErrStorage
@@ -208,10 +235,17 @@ func (b *postgresBackend) Update(ctx context.Context, organizationID, credential
         VALUES ($1, $2, $3, $4, $5)`, credentialID, metadata.Version, recordJSON, record.MasterKeyID, metadata.UpdatedAt); err != nil {
 		return Metadata{}, ErrStorage
 	}
+	if err := b.appendAudit(ctx, tx, credentialAudit(operation, metadata)); err != nil {
+		return Metadata{}, err
+	}
 	if err := tx.Commit(ctx); err != nil {
 		return Metadata{}, ErrStorage
 	}
 	return cloneMetadata(metadata), nil
+}
+
+func credentialAudit(operation string, metadata Metadata) audit.Event {
+	return audit.Event{SchemaVersion: audit.SchemaVersion, Timestamp: metadata.UpdatedAt.UTC(), EventType: "state_transition", Operation: operation, Result: "success", ReasonCode: "completed", OrganizationID: metadata.OrganizationID, CredentialID: metadata.ID, CredentialVersion: metadata.Version, CredentialSchema: metadata.SchemaVersion}
 }
 
 func encodeStorage(metadata Metadata, record envelope.Record) ([]byte, []byte, error) {

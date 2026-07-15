@@ -14,6 +14,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/Niftel/praetor-secrets/audit"
 	"github.com/Niftel/praetor-secrets/builtin"
 	"github.com/Niftel/praetor-secrets/credential"
 	"github.com/Niftel/praetor-secrets/masterkey"
@@ -42,6 +43,15 @@ func Build(ctx context.Context, config Config) (*Runtime, error) {
 		return nil, err
 	}
 	keys, err := masterkey.Load(masterkey.Config{CurrentPath: config.MasterKeyFile, PreviousPath: strings.TrimSpace(config.PreviousKeyFile)})
+	if err != nil {
+		return nil, ErrStartup
+	}
+	auditKey, err := audit.LoadKey(config.AuditKeyFile)
+	if err != nil {
+		return nil, ErrStartup
+	}
+	auditSpool, err := audit.New(auditKey, config.MaxPendingAuditEvents)
+	clear(auditKey)
 	if err != nil {
 		return nil, ErrStartup
 	}
@@ -94,9 +104,15 @@ func Build(ctx context.Context, config Config) (*Runtime, error) {
 	if err := credential.ApplyPostgresMigrations(ctx, pool); err != nil {
 		return nil, ErrStartup
 	}
+	if err := audit.ApplyMigration(ctx, pool); err != nil {
+		return nil, ErrStartup
+	}
 	registry := builtin.Registry{}
 	manager, err := credential.NewPostgresManager(keys, registry, pool, registry)
 	if err != nil {
+		return nil, ErrStartup
+	}
+	if err := manager.RequireAuditSpool(auditSpool); err != nil {
 		return nil, ErrStartup
 	}
 	handler, err := transport.NewServer(manager, transport.SPIFFEMapper{TrustDomain: config.TrustDomain})

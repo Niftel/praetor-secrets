@@ -7,6 +7,7 @@ import (
 	"errors"
 	"time"
 
+	"github.com/Niftel/praetor-secrets/audit"
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgconn"
 )
@@ -96,6 +97,9 @@ func (b *postgresBackend) RegisterBinding(ctx context.Context, registration bind
 	if err != nil {
 		return Binding{}, ErrStorage
 	}
+	if err := b.appendAudit(ctx, tx, bindingAudit("run_binding_registered", binding, "praetor-scheduler", "completed", registration.now)); err != nil {
+		return Binding{}, err
+	}
 	if err := tx.Commit(ctx); err != nil {
 		return Binding{}, ErrStorage
 	}
@@ -136,6 +140,9 @@ func (b *postgresBackend) CancelBinding(ctx context.Context, runID, dispatchID, 
 		if _, err := tx.Exec(ctx, "UPDATE run_bindings SET state = $1, cancel_reason = $2, updated_at = $3 WHERE run_id = $4", binding.State, reason, now, runID); err != nil {
 			return Binding{}, ErrStorage
 		}
+		if err := b.appendAudit(ctx, tx, bindingAudit("run_binding_canceled", binding, "praetor-scheduler", reason, now)); err != nil {
+			return Binding{}, err
+		}
 	}
 	if err := tx.Commit(ctx); err != nil {
 		return Binding{}, ErrStorage
@@ -169,6 +176,10 @@ func (b *postgresBackend) ClaimResolution(ctx context.Context, claim resolutionC
 		if binding.State != BindingExpired && binding.State != BindingExhausted {
 			if _, err := tx.Exec(ctx, "UPDATE run_bindings SET state = 'expired', updated_at = $1 WHERE run_id = $2", claim.now, claim.runID); err != nil {
 				return Binding{}, time.Time{}, ErrStorage
+			}
+			binding.State = BindingExpired
+			if err := b.appendAudit(ctx, tx, bindingAudit("run_binding_expired", binding, claim.executorIdentity, "binding_expired", claim.now)); err != nil {
+				return Binding{}, time.Time{}, err
 			}
 		}
 		if err := tx.Commit(ctx); err != nil {
@@ -212,6 +223,10 @@ func (b *postgresBackend) ClaimResolution(ctx context.Context, claim resolutionC
 			if _, err := tx.Exec(ctx, "UPDATE run_bindings SET state = 'exhausted', updated_at = $1 WHERE run_id = $2", claim.now, claim.runID); err != nil {
 				return Binding{}, time.Time{}, ErrStorage
 			}
+			binding.State = BindingExhausted
+			if err := b.appendAudit(ctx, tx, bindingAudit("run_binding_exhausted", binding, claim.executorIdentity, "resolution_limit", claim.now)); err != nil {
+				return Binding{}, time.Time{}, err
+			}
 		}
 		if err := tx.Commit(ctx); err != nil {
 			return Binding{}, time.Time{}, ErrStorage
@@ -243,10 +258,17 @@ func (b *postgresBackend) ClaimResolution(ctx context.Context, claim resolutionC
 		binding.ResolutionCount, binding.State, binding.UpdatedAt, binding.RunID); err != nil {
 		return Binding{}, time.Time{}, ErrStorage
 	}
+	if err := b.appendAudit(ctx, tx, bindingAudit("credential_resolved", binding, claim.executorIdentity, "completed", claim.now)); err != nil {
+		return Binding{}, time.Time{}, err
+	}
 	if err := tx.Commit(ctx); err != nil {
 		return Binding{}, time.Time{}, ErrStorage
 	}
 	return binding, attemptExpiry, nil
+}
+
+func bindingAudit(operation string, binding Binding, workload, reason string, timestamp time.Time) audit.Event {
+	return audit.Event{SchemaVersion: audit.SchemaVersion, Timestamp: timestamp.UTC(), EventType: "state_transition", Operation: operation, Result: "success", ReasonCode: reason, WorkloadIdentity: workload, OrganizationID: binding.OrganizationID, CredentialID: binding.CredentialID, RunID: binding.RunID, ExecutorIdentity: binding.ExecutorIdentity, CredentialVersion: binding.CredentialVersion}
 }
 
 func postgresBoundVersion(ctx context.Context, tx pgx.Tx, binding Binding) (boundRecord, error) {
