@@ -16,6 +16,7 @@ model and service API specification have been reviewed.
 
 - [Threat model](docs/threat-model.md)
 - [Service API and trust-boundary specification](docs/service-api.md)
+- [Envelope record format](docs/envelope-format.md)
 
 ## Core invariants
 
