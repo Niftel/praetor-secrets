@@ -32,7 +32,7 @@ func (mapper SPIFFEMapper) Identity(certificate *x509.Certificate) (credential.W
 	if len(parts) == 2 && parts[0] == "workload" && parts[1] == "praetor-scheduler" {
 		return credential.WorkloadIdentity{Role: credential.RoleScheduler, Subject: string(credential.RoleScheduler)}, nil
 	}
-	if len(parts) == 2 && parts[0] == "workload" && (parts[1] == string(credential.RoleSecretsOperator) || parts[1] == string(credential.RoleSecretsAuditor)) {
+	if len(parts) == 2 && parts[0] == "workload" && (parts[1] == string(credential.RoleSecretsOperator) || parts[1] == string(credential.RoleSecretsAuditor) || parts[1] == string(credential.RoleAPI)) {
 		role := credential.WorkloadRole(parts[1])
 		return credential.WorkloadIdentity{Role: role, Subject: parts[1]}, nil
 	}

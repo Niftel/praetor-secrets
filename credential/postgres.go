@@ -68,6 +68,11 @@ func (b *postgresBackend) appendCompletion(ctx context.Context, tx pgx.Tx, event
 }
 
 func (b *postgresBackend) appendSuccessfulTransition(ctx context.Context, tx pgx.Tx, event audit.Event) error {
+	if request, ok := audit.RequestFromContext(ctx); ok {
+		event.RequestID = request.ID
+		event.WorkloadIdentity = request.WorkloadIdentity
+		event.HumanActor = request.HumanActor
+	}
 	if err := b.appendAudit(ctx, tx, event); err != nil {
 		return err
 	}

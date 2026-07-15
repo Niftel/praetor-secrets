@@ -77,6 +77,7 @@ trust domain:
 
 - `spiffe://<trust-domain>/workload/praetor-scheduler`
 - `spiffe://<trust-domain>/workload/praetor-executor/<instance>`
+- `spiffe://<trust-domain>/workload/praetor-api`
 - `spiffe://<trust-domain>/workload/praetor-secrets-operator`
 - `spiffe://<trust-domain>/workload/praetor-secrets-auditor`
 
