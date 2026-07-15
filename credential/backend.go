@@ -14,7 +14,7 @@ type backend interface {
 	Update(context.Context, string, string, uint64, Metadata, envelope.Record) (Metadata, error)
 	RegisterBinding(context.Context, bindingRegistration) (Binding, error)
 	GetBinding(context.Context, string) (Binding, error)
-	CancelBinding(context.Context, string, string, time.Time) (Binding, error)
+	CancelBinding(context.Context, string, string, string, time.Time) (Binding, error)
 	ClaimResolution(context.Context, resolutionClaim, func(Binding, boundRecord) error) (Binding, time.Time, error)
 }
 

@@ -80,6 +80,12 @@ type ResolveRequest struct {
 	RequestedAt time.Time
 }
 
+type CancelBindingRequest struct {
+	RunID      string
+	DispatchID string
+	Reason     string
+}
+
 type ResolvedFile struct {
 	Name    string `json:"name"`
 	Mode    string `json:"mode"`
@@ -198,14 +204,14 @@ func (m *Manager) InspectBinding(ctx context.Context, caller WorkloadIdentity, r
 	return m.backend.GetBinding(ctx, runID)
 }
 
-func (m *Manager) CancelBinding(ctx context.Context, caller WorkloadIdentity, runID, reason string) (Binding, error) {
+func (m *Manager) CancelBinding(ctx context.Context, caller WorkloadIdentity, request CancelBindingRequest) (Binding, error) {
 	if !isScheduler(caller) {
 		return Binding{}, ErrUnauthorized
 	}
-	if !validUUID(runID) || !validReason(reason) {
+	if !validUUID(request.RunID) || !validUUID(request.DispatchID) || !validReason(request.Reason) {
 		return Binding{}, ErrInvalidInput
 	}
-	return m.backend.CancelBinding(ctx, runID, reason, m.now())
+	return m.backend.CancelBinding(ctx, request.RunID, request.DispatchID, request.Reason, m.now())
 }
 
 func (m *Manager) Resolve(ctx context.Context, caller WorkloadIdentity, request ResolveRequest) (ResolvedCredential, error) {

@@ -14,7 +14,8 @@ Development is tracked in the private
 Core service implementation is underway. The envelope format, strict
 file-backed master-key loader, redacted credential lifecycle, and transactional
 PostgreSQL persistence are implemented. The run-binding and executor-resolution
-domain is implemented; authenticated transport follows.
+domain and authenticated internal transport are implemented; service assembly,
+audit delivery, and Praetor integration follow.
 
 - [Threat model](docs/threat-model.md)
 - [Service API and trust-boundary specification](docs/service-api.md)
@@ -66,6 +67,21 @@ restricted to validated environment names and logical files with mode `0600`.
 Failed decryption, authentication, or injector validation rolls back the attempt
 and does not consume a resolution. Production transport must construct workload
 identities exclusively from verified mTLS certificates, never request headers.
+
+### Workload mTLS
+
+The internal server requires TLS 1.3 and a client certificate chaining to the
+configured workload CA. It accepts exactly one SPIFFE URI SAN in the configured
+trust domain:
+
+- `spiffe://<trust-domain>/workload/praetor-scheduler`
+- `spiffe://<trust-domain>/workload/praetor-executor/<instance>`
+
+Certificate subjects, DNS SANs, source addresses, proxy headers, and identity
+headers are ignored. Scheduler routes cannot be called by executor identities,
+and executor resolution cannot be called by the scheduler. Secret-bearing
+responses disable caching and compression, close the connection after the
+bounded response, and use stable value-free errors.
 
 ## Core invariants
 

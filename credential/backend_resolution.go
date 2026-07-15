@@ -49,12 +49,15 @@ func (b *memoryBackend) GetBinding(_ context.Context, runID string) (Binding, er
 	return stored.binding, nil
 }
 
-func (b *memoryBackend) CancelBinding(_ context.Context, runID, reason string, now time.Time) (Binding, error) {
+func (b *memoryBackend) CancelBinding(_ context.Context, runID, dispatchID, reason string, now time.Time) (Binding, error) {
 	b.mu.Lock()
 	defer b.mu.Unlock()
 	stored, ok := b.bindings[runID]
 	if !ok {
 		return Binding{}, ErrBindingNotFound
+	}
+	if stored.binding.DispatchID != dispatchID {
+		return Binding{}, ErrBindingConflict
 	}
 	if stored.binding.State == BindingCanceled || stored.binding.State == BindingExpired || stored.binding.State == BindingExhausted {
 		return stored.binding, nil

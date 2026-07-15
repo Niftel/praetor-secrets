@@ -113,7 +113,7 @@ func (b *postgresBackend) GetBinding(ctx context.Context, runID string) (Binding
 	return binding, nil
 }
 
-func (b *postgresBackend) CancelBinding(ctx context.Context, runID, reason string, now time.Time) (Binding, error) {
+func (b *postgresBackend) CancelBinding(ctx context.Context, runID, dispatchID, reason string, now time.Time) (Binding, error) {
 	tx, err := b.pool.BeginTx(ctx, pgx.TxOptions{})
 	if err != nil {
 		return Binding{}, ErrStorage
@@ -125,6 +125,9 @@ func (b *postgresBackend) CancelBinding(ctx context.Context, runID, reason strin
 	}
 	if err != nil {
 		return Binding{}, ErrStorage
+	}
+	if binding.DispatchID != dispatchID {
+		return Binding{}, ErrBindingConflict
 	}
 	if binding.State != BindingCanceled && binding.State != BindingExpired && binding.State != BindingExhausted {
 		binding.State = BindingCanceled
