@@ -8,15 +8,19 @@ import (
 
 func validEnvironment() map[string]string {
 	return map[string]string{
-		"PRAETOR_SECRETS_LISTEN_ADDRESS":        "127.0.0.1:8443",
-		"PRAETOR_SECRETS_HEALTH_LISTEN_ADDRESS": "127.0.0.1:8081",
-		"PRAETOR_SECRETS_TRUST_DOMAIN":          "praetor.local",
-		"PRAETOR_SECRETS_DATABASE_URL_FILE":     "/run/secrets/database-url",
-		"PRAETOR_SECRETS_MASTER_KEY_FILE":       "/run/secrets/master-key",
-		"PRAETOR_SECRETS_AUDIT_KEY_FILE":        "/run/secrets/audit-key",
-		"PRAETOR_SECRETS_TLS_CERTIFICATE_FILE":  "/run/tls/tls.crt",
-		"PRAETOR_SECRETS_TLS_PRIVATE_KEY_FILE":  "/run/tls/tls.key",
-		"PRAETOR_SECRETS_CLIENT_CA_FILE":        "/run/tls/ca.crt",
+		"PRAETOR_SECRETS_LISTEN_ADDRESS":              "127.0.0.1:8443",
+		"PRAETOR_SECRETS_HEALTH_LISTEN_ADDRESS":       "127.0.0.1:8081",
+		"PRAETOR_SECRETS_TRUST_DOMAIN":                "praetor.local",
+		"PRAETOR_SECRETS_DATABASE_URL_FILE":           "/run/secrets/database-url",
+		"PRAETOR_SECRETS_MASTER_KEY_FILE":             "/run/secrets/master-key",
+		"PRAETOR_SECRETS_AUDIT_KEY_FILE":              "/run/secrets/audit-key",
+		"PRAETOR_SECRETS_TLS_CERTIFICATE_FILE":        "/run/tls/tls.crt",
+		"PRAETOR_SECRETS_TLS_PRIVATE_KEY_FILE":        "/run/tls/tls.key",
+		"PRAETOR_SECRETS_CLIENT_CA_FILE":              "/run/tls/ca.crt",
+		"PRAETOR_SECRETS_AUDIT_SINK_URL":              "https://audit.local/events",
+		"PRAETOR_SECRETS_AUDIT_SINK_CA_FILE":          "/run/audit/ca.crt",
+		"PRAETOR_SECRETS_AUDIT_SINK_CERTIFICATE_FILE": "/run/audit/tls.crt",
+		"PRAETOR_SECRETS_AUDIT_SINK_PRIVATE_KEY_FILE": "/run/audit/tls.key",
 	}
 }
 
@@ -34,8 +38,11 @@ func TestLoadConfigDefaultsAndOverrides(t *testing.T) {
 	values["PRAETOR_SECRETS_MAX_DATABASE_CONNECTIONS"] = "20"
 	values["PRAETOR_SECRETS_MAX_NETWORK_CONNECTIONS"] = "250"
 	values["PRAETOR_SECRETS_MAX_PENDING_AUDIT_EVENTS"] = "2500"
+	values["PRAETOR_SECRETS_AUDIT_DELIVERY_BATCH_SIZE"] = "25"
+	values["PRAETOR_SECRETS_AUDIT_DELIVERY_POLL_INTERVAL"] = "2s"
+	values["PRAETOR_SECRETS_AUDIT_DELIVERY_REQUEST_TIMEOUT"] = "8s"
 	config, err = loadMap(values)
-	if err != nil || config.ShutdownTimeout != 45*time.Second || config.MaxDatabaseConns != 20 || config.MaxNetworkConns != 250 || config.MaxPendingAuditEvents != 2500 {
+	if err != nil || config.ShutdownTimeout != 45*time.Second || config.MaxDatabaseConns != 20 || config.MaxNetworkConns != 250 || config.MaxPendingAuditEvents != 2500 || config.AuditDeliveryBatchSize != 25 || config.AuditDeliveryPollInterval != 2*time.Second || config.AuditDeliveryRequestTimeout != 8*time.Second {
 		t.Fatalf("overridden config=%+v err=%v", config, err)
 	}
 }
@@ -46,6 +53,7 @@ func TestLoadConfigRejectsMissingAndUnsafeValues(t *testing.T) {
 		"PRAETOR_SECRETS_TRUST_DOMAIN", "PRAETOR_SECRETS_DATABASE_URL_FILE",
 		"PRAETOR_SECRETS_MASTER_KEY_FILE", "PRAETOR_SECRETS_TLS_CERTIFICATE_FILE",
 		"PRAETOR_SECRETS_AUDIT_KEY_FILE",
+		"PRAETOR_SECRETS_AUDIT_SINK_URL", "PRAETOR_SECRETS_AUDIT_SINK_CA_FILE", "PRAETOR_SECRETS_AUDIT_SINK_CERTIFICATE_FILE", "PRAETOR_SECRETS_AUDIT_SINK_PRIVATE_KEY_FILE",
 		"PRAETOR_SECRETS_TLS_PRIVATE_KEY_FILE", "PRAETOR_SECRETS_CLIENT_CA_FILE",
 	} {
 		t.Run(name, func(t *testing.T) {
@@ -64,6 +72,9 @@ func TestLoadConfigRejectsMissingAndUnsafeValues(t *testing.T) {
 		{"PRAETOR_SECRETS_MAX_DATABASE_CONNECTIONS", "0"},
 		{"PRAETOR_SECRETS_MAX_NETWORK_CONNECTIONS", "10001"},
 		{"PRAETOR_SECRETS_MAX_PENDING_AUDIT_EVENTS", "0"},
+		{"PRAETOR_SECRETS_AUDIT_DELIVERY_BATCH_SIZE", "0"},
+		{"PRAETOR_SECRETS_AUDIT_DELIVERY_POLL_INTERVAL", "10ms"},
+		{"PRAETOR_SECRETS_AUDIT_DELIVERY_REQUEST_TIMEOUT", "100ms"},
 	}
 	for _, test := range invalid {
 		t.Run(test.name+test.value, func(t *testing.T) {

@@ -15,20 +15,27 @@ var (
 )
 
 type Config struct {
-	ListenAddress         string
-	HealthListenAddress   string
-	TrustDomain           string
-	DatabaseURLFile       string
-	MasterKeyFile         string
-	AuditKeyFile          string
-	PreviousKeyFile       string
-	TLSCertificateFile    string
-	TLSPrivateKeyFile     string
-	ClientCAFile          string
-	ShutdownTimeout       time.Duration
-	MaxDatabaseConns      int32
-	MaxNetworkConns       int
-	MaxPendingAuditEvents int64
+	ListenAddress               string
+	HealthListenAddress         string
+	TrustDomain                 string
+	DatabaseURLFile             string
+	MasterKeyFile               string
+	AuditKeyFile                string
+	PreviousKeyFile             string
+	TLSCertificateFile          string
+	TLSPrivateKeyFile           string
+	ClientCAFile                string
+	AuditSinkURL                string
+	AuditSinkCAFile             string
+	AuditSinkCertificateFile    string
+	AuditSinkPrivateKeyFile     string
+	ShutdownTimeout             time.Duration
+	MaxDatabaseConns            int32
+	MaxNetworkConns             int
+	MaxPendingAuditEvents       int64
+	AuditDeliveryBatchSize      int
+	AuditDeliveryPollInterval   time.Duration
+	AuditDeliveryRequestTimeout time.Duration
 }
 
 func LoadConfig(lookup func(string) (string, bool)) (Config, error) {
@@ -69,10 +76,25 @@ func LoadConfig(lookup func(string) (string, bool)) (Config, error) {
 	if config.ClientCAFile, ok = required("PRAETOR_SECRETS_CLIENT_CA_FILE"); !ok {
 		return Config{}, ErrConfiguration
 	}
+	if config.AuditSinkURL, ok = required("PRAETOR_SECRETS_AUDIT_SINK_URL"); !ok {
+		return Config{}, ErrConfiguration
+	}
+	if config.AuditSinkCAFile, ok = required("PRAETOR_SECRETS_AUDIT_SINK_CA_FILE"); !ok {
+		return Config{}, ErrConfiguration
+	}
+	if config.AuditSinkCertificateFile, ok = required("PRAETOR_SECRETS_AUDIT_SINK_CERTIFICATE_FILE"); !ok {
+		return Config{}, ErrConfiguration
+	}
+	if config.AuditSinkPrivateKeyFile, ok = required("PRAETOR_SECRETS_AUDIT_SINK_PRIVATE_KEY_FILE"); !ok {
+		return Config{}, ErrConfiguration
+	}
 	config.ShutdownTimeout = 20 * time.Second
 	config.MaxDatabaseConns = 10
 	config.MaxNetworkConns = 100
 	config.MaxPendingAuditEvents = 100000
+	config.AuditDeliveryBatchSize = 100
+	config.AuditDeliveryPollInterval = time.Second
+	config.AuditDeliveryRequestTimeout = 5 * time.Second
 	if value, exists := lookup("PRAETOR_SECRETS_SHUTDOWN_TIMEOUT"); exists && value != "" {
 		duration, err := time.ParseDuration(value)
 		if err != nil || duration < time.Second || duration > 5*time.Minute {
@@ -101,6 +123,27 @@ func LoadConfig(lookup func(string) (string, bool)) (Config, error) {
 		}
 		config.MaxPendingAuditEvents = parsed
 	}
+	if value, exists := lookup("PRAETOR_SECRETS_AUDIT_DELIVERY_BATCH_SIZE"); exists && value != "" {
+		parsed, err := strconv.Atoi(value)
+		if err != nil || parsed < 1 || parsed > 1000 {
+			return Config{}, ErrConfiguration
+		}
+		config.AuditDeliveryBatchSize = parsed
+	}
+	if value, exists := lookup("PRAETOR_SECRETS_AUDIT_DELIVERY_POLL_INTERVAL"); exists && value != "" {
+		parsed, err := time.ParseDuration(value)
+		if err != nil || parsed < 100*time.Millisecond || parsed > time.Minute {
+			return Config{}, ErrConfiguration
+		}
+		config.AuditDeliveryPollInterval = parsed
+	}
+	if value, exists := lookup("PRAETOR_SECRETS_AUDIT_DELIVERY_REQUEST_TIMEOUT"); exists && value != "" {
+		parsed, err := time.ParseDuration(value)
+		if err != nil || parsed < time.Second || parsed > time.Minute {
+			return Config{}, ErrConfiguration
+		}
+		config.AuditDeliveryRequestTimeout = parsed
+	}
 	if err := validateConfig(config); err != nil {
 		return Config{}, err
 	}
@@ -108,9 +151,9 @@ func LoadConfig(lookup func(string) (string, bool)) (Config, error) {
 }
 
 func validateConfig(config Config) error {
-	if config.DatabaseURLFile == "" || config.MasterKeyFile == "" || config.AuditKeyFile == "" || config.TLSCertificateFile == "" ||
+	if config.DatabaseURLFile == "" || config.MasterKeyFile == "" || config.AuditKeyFile == "" || config.TLSCertificateFile == "" || config.AuditSinkURL == "" || config.AuditSinkCAFile == "" || config.AuditSinkCertificateFile == "" || config.AuditSinkPrivateKeyFile == "" ||
 		config.TLSPrivateKeyFile == "" || config.ClientCAFile == "" || config.ShutdownTimeout <= 0 ||
-		config.MaxDatabaseConns <= 0 || config.MaxNetworkConns <= 0 || config.MaxPendingAuditEvents <= 0 {
+		config.MaxDatabaseConns <= 0 || config.MaxNetworkConns <= 0 || config.MaxPendingAuditEvents <= 0 || config.AuditDeliveryBatchSize <= 0 || config.AuditDeliveryPollInterval <= 0 || config.AuditDeliveryRequestTimeout <= 0 {
 		return ErrConfiguration
 	}
 	for _, address := range []string{config.ListenAddress, config.HealthListenAddress} {

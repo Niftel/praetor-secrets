@@ -104,6 +104,10 @@ Required environment variables:
 | `PRAETOR_SECRETS_TLS_CERTIFICATE_FILE` | server certificate chain |
 | `PRAETOR_SECRETS_TLS_PRIVATE_KEY_FILE` | restricted server private-key file |
 | `PRAETOR_SECRETS_CLIENT_CA_FILE` | CA used to authenticate workload clients |
+| `PRAETOR_SECRETS_AUDIT_SINK_URL` | HTTPS endpoint accepting ordered audit records |
+| `PRAETOR_SECRETS_AUDIT_SINK_CA_FILE` | CA authenticating the remote audit sink |
+| `PRAETOR_SECRETS_AUDIT_SINK_CERTIFICATE_FILE` | outbound audit-delivery client certificate |
+| `PRAETOR_SECRETS_AUDIT_SINK_PRIVATE_KEY_FILE` | restricted outbound client private key |
 
 `PRAETOR_SECRETS_PREVIOUS_KEY_FILE` is optional during controlled rotation.
 Optional bounded resource settings are `PRAETOR_SECRETS_SHUTDOWN_TIMEOUT`
@@ -111,6 +115,11 @@ Optional bounded resource settings are `PRAETOR_SECRETS_SHUTDOWN_TIMEOUT`
 and `PRAETOR_SECRETS_MAX_NETWORK_CONNECTIONS` (default `100`).
 `PRAETOR_SECRETS_MAX_PENDING_AUDIT_EVENTS` bounds the durable undelivered
 audit queue (default `100000`); once full, sensitive mutations fail closed.
+Delivery defaults to batches of `100`, a `1s` poll interval, and a `5s`
+per-record timeout. The corresponding bounded overrides are
+`PRAETOR_SECRETS_AUDIT_DELIVERY_BATCH_SIZE`,
+`PRAETOR_SECRETS_AUDIT_DELIVERY_POLL_INTERVAL`, and
+`PRAETOR_SECRETS_AUDIT_DELIVERY_REQUEST_TIMEOUT`.
 
 The health listener exposes `GET /livez` and `GET /readyz`. It carries no
 credential routes and should remain restricted to the cluster health-check
@@ -126,9 +135,11 @@ value-free schema and form an HMAC-SHA-256 chain authenticated by the separate
 audit key. Startup migrations make event content and chain fields immutable;
 only an exact-MAC delivery acknowledgement may set `delivered_at`.
 
-The spool verifies the complete chain and durable head before delivery. Remote
-sink delivery is intentionally a separate component so sink downtime does not
-block mutations until the bounded local spool is exhausted.
+The spool verifies the complete chain and durable head before delivery. Sink
+downtime does not block mutations until the bounded local spool is exhausted.
+Records are sent in sequence order over HTTPS with a stable MAC-derived
+idempotency key. A record is acknowledged locally only after a 2xx response;
+failures retry without skipping later records.
 
 ## Core invariants
 
