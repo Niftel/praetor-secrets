@@ -15,8 +15,8 @@ Core service implementation is underway. The envelope format, strict
 file-backed master-key loader, redacted credential lifecycle, and transactional
 PostgreSQL persistence are implemented. The run-binding and executor-resolution
 domain, authenticated internal transport, executable service assembly, and the
-authenticated durable audit spool are implemented; remote audit-sink delivery
-and Praetor integration follow.
+authenticated durable audit spool, remote delivery, and independent immutable
+audit sink are implemented; Praetor integration follows.
 
 - [Threat model](docs/threat-model.md)
 - [Service API and trust-boundary specification](docs/service-api.md)
@@ -138,6 +138,13 @@ pre-existing Kubernetes Secrets for the database URL, encryption/audit keys,
 server identity, workload CA, and audit-sink identity. The chart never accepts
 their contents as values and stages them as non-root-owned `0400` files in an
 in-memory volume before starting the service.
+
+The independent audit receiver is built with `go build ./cmd/praetor-audit-sink`
+and deployed with [`charts/praetor-audit-sink`](charts/praetor-audit-sink/README.md).
+It uses a separate PostgreSQL ownership boundary and accepts ingestion only from
+the exact `spiffe://<trust-domain>/workload/praetor-secrets` client identity.
+Its database URL and private key are likewise supplied only through restricted
+files; see the chart README for the deployment variables and Secret keys.
 
 ## Audit spool
 

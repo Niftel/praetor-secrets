@@ -1,0 +1,9 @@
+apiVersion: v2
+name: praetor-audit-sink
+description: Immutable remote audit append sink for Praetor Secrets
+type: application
+version: 0.1.0
+appVersion: "0.1.0"
+home: https://github.com/Niftel/praetor-secrets
+sources:
+  - https://github.com/Niftel/praetor-secrets

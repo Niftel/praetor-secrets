@@ -1,0 +1,11 @@
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "praetor-audit-sink.fullname" . }}
+  labels:
+    {{- include "praetor-audit-sink.labels" . | nindent 4 }}
+spec:
+  selector:
+    {{- include "praetor-audit-sink.selectorLabels" . | nindent 4 }}
+  ports:
+    - { name: mtls, port: {{ .Values.service.port }}, targetPort: mtls, protocol: TCP }

@@ -1,0 +1,30 @@
+{
+  "$schema": "https://json-schema.org/draft-07/schema#",
+  "type": "object",
+  "properties": {
+    "replicaCount": { "type": "integer", "minimum": 1 },
+    "trustDomain": { "type": "string", "minLength": 1 },
+    "service": {
+      "type": "object",
+      "properties": {
+        "port": { "type": "integer", "minimum": 1, "maximum": 65535 },
+        "healthPort": { "type": "integer", "minimum": 1, "maximum": 65535 }
+      }
+    },
+    "secrets": {
+      "type": "object",
+      "properties": {
+        "runtimeSecret": { "type": "string", "minLength": 1 },
+        "serverTLSSecret": { "type": "string", "minLength": 1 }
+      }
+    },
+    "limits": {
+      "type": "object",
+      "properties": {
+        "databaseConnections": { "type": "integer", "minimum": 1, "maximum": 100 },
+        "networkConnections": { "type": "integer", "minimum": 1, "maximum": 10000 },
+        "shutdownTimeout": { "type": "string" }
+      }
+    }
+  }
+}

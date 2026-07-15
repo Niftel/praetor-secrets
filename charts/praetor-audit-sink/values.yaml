@@ -1,0 +1,36 @@
+replicaCount: 1
+
+image:
+  repository: ghcr.io/niftel/praetor-secrets
+  tag: ""
+  pullPolicy: IfNotPresent
+  pullSecrets: []
+
+serviceAccount:
+  create: true
+  name: ""
+  annotations: {}
+
+service:
+  port: 8444
+  healthPort: 8082
+
+trustDomain: ""
+
+secrets:
+  runtimeSecret: ""   # database-url
+  serverTLSSecret: "" # tls.crt, tls.key, ca.crt (Praetor Secrets client CA)
+
+limits:
+  databaseConnections: 10
+  networkConnections: 100
+  shutdownTimeout: 20s
+
+resources: {}
+podAnnotations: {}
+podSecurityContext:
+  seccompProfile:
+    type: RuntimeDefault
+nodeSelector: {}
+tolerations: []
+affinity: {}

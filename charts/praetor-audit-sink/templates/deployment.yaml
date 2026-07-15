@@ -1,0 +1,106 @@
+{{- if eq (int .Values.service.port) (int .Values.service.healthPort) }}{{ fail "service.port and service.healthPort must differ" }}{{ end }}
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "praetor-audit-sink.fullname" . }}
+  labels:
+    {{- include "praetor-audit-sink.labels" . | nindent 4 }}
+spec:
+  replicas: {{ .Values.replicaCount }}
+  selector:
+    matchLabels:
+      {{- include "praetor-audit-sink.selectorLabels" . | nindent 6 }}
+  template:
+    metadata:
+      labels:
+        {{- include "praetor-audit-sink.selectorLabels" . | nindent 8 }}
+      {{- with .Values.podAnnotations }}
+      annotations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+    spec:
+      serviceAccountName: {{ include "praetor-audit-sink.serviceAccountName" . }}
+      automountServiceAccountToken: false
+      securityContext:
+        {{- toYaml .Values.podSecurityContext | nindent 8 }}
+      {{- with .Values.image.pullSecrets }}
+      imagePullSecrets:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      initContainers:
+        - name: stage-restricted-files
+          image: alpine:3.23@sha256:fd791d74b68913cbb027c6546007b3f0d3bc45125f797758156952bc2d6daf40
+          command: ["/bin/sh", "-ec"]
+          args:
+            - |
+              cp /source/runtime/database-url /restricted/database-url
+              cp /source/server/tls.crt /restricted/tls.crt
+              cp /source/server/tls.key /restricted/tls.key
+              cp /source/server/ca.crt /restricted/ca.crt
+              chown -R 10001:10001 /restricted
+              chmod 0400 /restricted/*
+          securityContext:
+            runAsUser: 0
+            runAsNonRoot: false
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities: { drop: ["ALL"], add: ["CHOWN"] }
+          volumeMounts:
+            - { name: runtime-source, mountPath: /source/runtime, readOnly: true }
+            - { name: server-source, mountPath: /source/server, readOnly: true }
+            - { name: restricted, mountPath: /restricted }
+      containers:
+        - name: praetor-audit-sink
+          image: {{ printf "%s:%s" .Values.image.repository (default .Chart.AppVersion .Values.image.tag) | quote }}
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          command: ["/usr/local/bin/praetor-audit-sink"]
+          securityContext:
+            runAsUser: 10001
+            runAsGroup: 10001
+            runAsNonRoot: true
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities: { drop: ["ALL"] }
+          env:
+            - { name: PRAETOR_AUDIT_SINK_LISTEN_ADDRESS, value: {{ printf ":%v" .Values.service.port | quote }} }
+            - { name: PRAETOR_AUDIT_SINK_HEALTH_LISTEN_ADDRESS, value: {{ printf ":%v" .Values.service.healthPort | quote }} }
+            - { name: PRAETOR_AUDIT_SINK_TRUST_DOMAIN, value: {{ .Values.trustDomain | quote }} }
+            - { name: PRAETOR_AUDIT_SINK_DATABASE_URL_FILE, value: /restricted/database-url }
+            - { name: PRAETOR_AUDIT_SINK_TLS_CERTIFICATE_FILE, value: /restricted/tls.crt }
+            - { name: PRAETOR_AUDIT_SINK_TLS_PRIVATE_KEY_FILE, value: /restricted/tls.key }
+            - { name: PRAETOR_AUDIT_SINK_CLIENT_CA_FILE, value: /restricted/ca.crt }
+            - { name: PRAETOR_AUDIT_SINK_SHUTDOWN_TIMEOUT, value: {{ .Values.limits.shutdownTimeout | quote }} }
+            - { name: PRAETOR_AUDIT_SINK_MAX_DATABASE_CONNECTIONS, value: {{ .Values.limits.databaseConnections | quote }} }
+            - { name: PRAETOR_AUDIT_SINK_MAX_NETWORK_CONNECTIONS, value: {{ .Values.limits.networkConnections | quote }} }
+          ports:
+            - { name: mtls, containerPort: {{ .Values.service.port }}, protocol: TCP }
+            - { name: health, containerPort: {{ .Values.service.healthPort }}, protocol: TCP }
+          readinessProbe:
+            httpGet: { path: /readyz, port: health, scheme: HTTP }
+          livenessProbe:
+            httpGet: { path: /livez, port: health, scheme: HTTP }
+          volumeMounts:
+            - { name: restricted, mountPath: /restricted, readOnly: true }
+          {{- with .Values.resources }}
+          resources:
+            {{- toYaml . | nindent 12 }}
+          {{- end }}
+      volumes:
+        - name: runtime-source
+          secret: { secretName: {{ .Values.secrets.runtimeSecret | quote }}, defaultMode: 0400 }
+        - name: server-source
+          secret: { secretName: {{ .Values.secrets.serverTLSSecret | quote }}, defaultMode: 0400 }
+        - name: restricted
+          emptyDir: { medium: Memory, sizeLimit: 2Mi }
+      {{- with .Values.nodeSelector }}
+      nodeSelector:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.affinity }}
+      affinity:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.tolerations }}
+      tolerations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
