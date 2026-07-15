@@ -21,6 +21,12 @@ secrets:
   runtimeSecret: ""   # database-url
   serverTLSSecret: "" # tls.crt, tls.key, ca.crt (Praetor Secrets client CA)
 
+networkPolicy:
+  enabled: false
+  sameReleaseOnly: false
+  clientPodSelector:
+    app.kubernetes.io/name: praetor-secrets
+
 limits:
   databaseConnections: 10
   networkConnections: 100

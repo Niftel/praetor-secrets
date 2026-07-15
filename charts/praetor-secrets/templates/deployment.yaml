@@ -2,7 +2,6 @@
 {{- if not .Values.secrets.runtimeSecret }}{{ fail "secrets.runtimeSecret is required" }}{{ end }}
 {{- if not .Values.secrets.serverTLSSecret }}{{ fail "secrets.serverTLSSecret is required" }}{{ end }}
 {{- if not .Values.secrets.auditSinkTLSSecret }}{{ fail "secrets.auditSinkTLSSecret is required" }}{{ end }}
-{{- if not (hasPrefix "https://" .Values.auditSink.url) }}{{ fail "auditSink.url must use https://" }}{{ end }}
 {{- if eq (int .Values.service.port) (int .Values.service.healthPort) }}{{ fail "service.port and service.healthPort must differ" }}{{ end }}
 apiVersion: apps/v1
 kind: Deployment
@@ -91,7 +90,7 @@ spec:
             - { name: PRAETOR_SECRETS_TLS_CERTIFICATE_FILE, value: /restricted/server/tls.crt }
             - { name: PRAETOR_SECRETS_TLS_PRIVATE_KEY_FILE, value: /restricted/server/tls.key }
             - { name: PRAETOR_SECRETS_CLIENT_CA_FILE, value: /restricted/server/ca.crt }
-            - { name: PRAETOR_SECRETS_AUDIT_SINK_URL, value: {{ .Values.auditSink.url | quote }} }
+            - { name: PRAETOR_SECRETS_AUDIT_SINK_URL, value: {{ include "praetor-secrets.auditSinkURL" . | quote }} }
             - { name: PRAETOR_SECRETS_AUDIT_SINK_CA_FILE, value: /restricted/audit/ca.crt }
             - { name: PRAETOR_SECRETS_AUDIT_SINK_CERTIFICATE_FILE, value: /restricted/audit/tls.crt }
             - { name: PRAETOR_SECRETS_AUDIT_SINK_PRIVATE_KEY_FILE, value: /restricted/audit/tls.key }

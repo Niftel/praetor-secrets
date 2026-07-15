@@ -2,6 +2,17 @@
 {{- default .Chart.Name .Values.nameOverride | trunc 63 | trimSuffix "-" -}}
 {{- end -}}
 
+{{- define "praetor-secrets.auditSinkURL" -}}
+{{- if .Values.auditSink.url -}}
+{{- if not (hasPrefix "https://" .Values.auditSink.url) -}}{{- fail "auditSink.url must use https://" -}}{{- end -}}
+{{- .Values.auditSink.url -}}
+{{- else -}}
+{{- $name := required "auditSink.url or auditSink.serviceName is required" .Values.auditSink.serviceName -}}
+{{- $namespace := default .Release.Namespace .Values.auditSink.serviceNamespace -}}
+{{- printf "https://%s.%s.svc:%v/internal/v1/audit/events" $name $namespace .Values.auditSink.servicePort -}}
+{{- end -}}
+{{- end -}}
+
 {{- define "praetor-secrets.fullname" -}}
 {{- if .Values.fullnameOverride -}}
 {{- .Values.fullnameOverride | trunc 63 | trimSuffix "-" -}}

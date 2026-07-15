@@ -25,6 +25,9 @@
       "type": "object",
       "properties": {
         "url": { "type": "string" },
+        "serviceName": { "type": "string" },
+        "serviceNamespace": { "type": "string" },
+        "servicePort": { "type": "integer", "minimum": 1, "maximum": 65535 },
         "batchSize": { "type": "integer", "minimum": 1, "maximum": 1000 },
         "pollInterval": { "type": "string" },
         "requestTimeout": { "type": "string" }

@@ -27,6 +27,9 @@ secrets:
 
 auditSink:
   url: ""
+  serviceName: ""
+  serviceNamespace: ""
+  servicePort: 8444
   batchSize: 100
   pollInterval: 1s
   requestTimeout: 5s

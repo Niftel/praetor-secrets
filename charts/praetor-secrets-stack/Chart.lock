@@ -1,0 +1,9 @@
+dependencies:
+- name: praetor-secrets
+  repository: file://../praetor-secrets
+  version: 0.1.0
+- name: praetor-audit-sink
+  repository: file://../praetor-audit-sink
+  version: 0.1.0
+digest: sha256:7d7ab41dd0336cbd058d276e1426f310bb4e37fac13275400140c7daff4844bb
+generated: "2026-07-15T22:06:39.323126+02:00"

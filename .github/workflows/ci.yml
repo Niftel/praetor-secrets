@@ -71,3 +71,6 @@ jobs:
             --set trustDomain=praetor.internal \
             --set secrets.runtimeSecret=runtime \
             --set secrets.serverTLSSecret=server
+
+      - name: Verify integrated Helm stack
+        run: charts/verify-stack.sh

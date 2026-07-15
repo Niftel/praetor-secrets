@@ -18,6 +18,14 @@
         "serverTLSSecret": { "type": "string", "minLength": 1 }
       }
     },
+    "networkPolicy": {
+      "type": "object",
+      "properties": {
+        "enabled": { "type": "boolean" },
+        "sameReleaseOnly": { "type": "boolean" },
+        "clientPodSelector": { "type": "object", "additionalProperties": { "type": "string" } }
+      }
+    },
     "limits": {
       "type": "object",
       "properties": {
