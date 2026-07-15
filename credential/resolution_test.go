@@ -135,7 +135,12 @@ func TestCancellationAndExpiryPreventResolution(t *testing.T) {
 	created, _ := manager.Create(validCreate())
 	bindingRequest := testBinding(*now, created.ID)
 	binding, _ := manager.RegisterBinding(context.Background(), schedulerIdentity(), bindingRequest)
-	canceled, err := manager.CancelBinding(context.Background(), schedulerIdentity(), binding.RunID, "run_canceled")
+	if _, err := manager.CancelBinding(context.Background(), schedulerIdentity(), CancelBindingRequest{
+		RunID: binding.RunID, DispatchID: "ffffffff-ffff-4fff-8fff-ffffffffffff", Reason: "stale_dispatch",
+	}); !errors.Is(err, ErrBindingConflict) {
+		t.Fatalf("stale dispatch canceled binding: %v", err)
+	}
+	canceled, err := manager.CancelBinding(context.Background(), schedulerIdentity(), CancelBindingRequest{RunID: binding.RunID, DispatchID: binding.DispatchID, Reason: "run_canceled"})
 	if err != nil || canceled.State != BindingCanceled {
 		t.Fatalf("cancel: %+v %v", canceled, err)
 	}
@@ -215,10 +220,10 @@ func TestResolutionInputValidation(t *testing.T) {
 	if err := manager.SetResolutionPolicy(policy); err != nil || manager.resolutionPolicy().MaxResolutions != 4 {
 		t.Fatalf("valid policy: %v", err)
 	}
-	if _, err := manager.CancelBinding(context.Background(), schedulerIdentity(), request.RunID, "UPPERCASE"); !errors.Is(err, ErrInvalidInput) {
+	if _, err := manager.CancelBinding(context.Background(), schedulerIdentity(), CancelBindingRequest{RunID: request.RunID, DispatchID: request.DispatchID, Reason: "UPPERCASE"}); !errors.Is(err, ErrInvalidInput) {
 		t.Fatalf("invalid cancellation reason: %v", err)
 	}
-	if _, err := manager.CancelBinding(context.Background(), schedulerIdentity(), request.RunID, "not_found"); !errors.Is(err, ErrBindingNotFound) {
+	if _, err := manager.CancelBinding(context.Background(), schedulerIdentity(), CancelBindingRequest{RunID: request.RunID, DispatchID: request.DispatchID, Reason: "not_found"}); !errors.Is(err, ErrBindingNotFound) {
 		t.Fatalf("missing cancellation: %v", err)
 	}
 	if _, err := manager.InspectBinding(context.Background(), schedulerIdentity(), "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa"); !errors.Is(err, ErrBindingNotFound) {

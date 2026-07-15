@@ -302,11 +302,16 @@ func TestPostgresCancellationAndBindingConflicts(t *testing.T) {
 	if _, err := manager.RegisterBinding(ctx, schedulerIdentity(), registration); !errors.Is(err, ErrBindingConflict) {
 		t.Fatalf("binding conflict: %v", err)
 	}
-	canceled, err := manager.CancelBinding(ctx, schedulerIdentity(), binding.RunID, "dispatch_canceled")
+	if _, err := manager.CancelBinding(ctx, schedulerIdentity(), CancelBindingRequest{
+		RunID: binding.RunID, DispatchID: "ffffffff-ffff-4fff-8fff-ffffffffffff", Reason: "stale_dispatch",
+	}); !errors.Is(err, ErrBindingConflict) {
+		t.Fatalf("stale dispatch canceled binding: %v", err)
+	}
+	canceled, err := manager.CancelBinding(ctx, schedulerIdentity(), CancelBindingRequest{RunID: binding.RunID, DispatchID: binding.DispatchID, Reason: "dispatch_canceled"})
 	if err != nil || canceled.State != BindingCanceled {
 		t.Fatalf("cancel: %+v %v", canceled, err)
 	}
-	again, err := manager.CancelBinding(ctx, schedulerIdentity(), binding.RunID, "different_reason")
+	again, err := manager.CancelBinding(ctx, schedulerIdentity(), CancelBindingRequest{RunID: binding.RunID, DispatchID: binding.DispatchID, Reason: "different_reason"})
 	if err != nil || again.CancelReason != "dispatch_canceled" {
 		t.Fatalf("cancel was not idempotent: %+v %v", again, err)
 	}
