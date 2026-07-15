@@ -545,6 +545,12 @@ Audit delivery failure follows an explicit policy: security-sensitive state
 changes fail closed when the durable local audit spool cannot accept an event.
 Read-only metadata operations may continue with a degraded security-status alert.
 Remote audit-sink availability is decoupled through the bounded durable spool.
+The local spool authenticates an append-only sequence with a dedicated
+file-backed HMAC key. The chain head, sequence, previous MAC, canonical event,
+and current MAC are verified before delivery. Delivery acknowledgements may set
+only `delivered_at` and must match the record MAC; event content remains
+immutable. Exhausting the configured pending-event bound rejects the enclosing
+state-change transaction.
 
 ## 13. Rate and resource limits
 

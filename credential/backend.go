@@ -11,7 +11,7 @@ import (
 type backend interface {
 	Create(context.Context, string, [32]byte, Metadata, envelope.Record) (Metadata, error)
 	Get(context.Context, string, string) (Metadata, envelope.Record, error)
-	Update(context.Context, string, string, uint64, Metadata, envelope.Record) (Metadata, error)
+	Update(context.Context, string, string, uint64, Metadata, envelope.Record, string) (Metadata, error)
 	RegisterBinding(context.Context, bindingRegistration) (Binding, error)
 	GetBinding(context.Context, string) (Binding, error)
 	CancelBinding(context.Context, string, string, string, time.Time) (Binding, error)
@@ -67,7 +67,7 @@ func (b *memoryBackend) Get(_ context.Context, organizationID, credentialID stri
 	return cloneMetadata(stored.metadata), stored.records[stored.metadata.Version], nil
 }
 
-func (b *memoryBackend) Update(_ context.Context, organizationID, credentialID string, expectedVersion uint64, metadata Metadata, record envelope.Record) (Metadata, error) {
+func (b *memoryBackend) Update(_ context.Context, organizationID, credentialID string, expectedVersion uint64, metadata Metadata, record envelope.Record, _ string) (Metadata, error) {
 	b.mu.Lock()
 	defer b.mu.Unlock()
 	stored, ok := b.credentials[credentialID]

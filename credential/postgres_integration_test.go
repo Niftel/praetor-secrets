@@ -13,6 +13,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/Niftel/praetor-secrets/audit"
 	"github.com/Niftel/praetor-secrets/envelope"
 	"github.com/Niftel/praetor-secrets/masterkey"
 	"github.com/jackc/pgx/v5/pgxpool"
@@ -47,6 +48,9 @@ func postgresTestPool(t *testing.T) *pgxpool.Pool {
 	if err != nil {
 		t.Fatal(err)
 	}
+	if err := audit.ApplyMigration(ctx, pool); err != nil {
+		t.Fatal(err)
+	}
 	t.Cleanup(func() {
 		pool.Close()
 		if _, err := admin.Exec(context.Background(), `DROP SCHEMA "`+schema+`" CASCADE`); err != nil {
@@ -66,6 +70,13 @@ func postgresTestManager(t *testing.T, pool *pgxpool.Pool) *Manager {
 	}
 	manager, err := NewPostgresManager(keys, testSchemas{}, pool)
 	if err != nil {
+		t.Fatal(err)
+	}
+	spool, err := audit.New(bytes.Repeat([]byte{0x24}, 32), 10000)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := manager.RequireAuditSpool(spool); err != nil {
 		t.Fatal(err)
 	}
 	manager.now = func() time.Time { return time.Date(2026, 7, 15, 14, 0, 0, 0, time.UTC) }
@@ -149,6 +160,30 @@ func TestPostgresCredentialLifecycle(t *testing.T) {
 	var versionCount int
 	if err := pool.QueryRow(ctx, "SELECT count(*) FROM credential_versions WHERE credential_id = $1", created.ID).Scan(&versionCount); err != nil || versionCount != 3 {
 		t.Fatalf("version history count=%d err=%v", versionCount, err)
+	}
+}
+
+func TestPostgresMutationFailsClosedWithoutAuditSpool(t *testing.T) {
+	pool := postgresTestPool(t)
+	ctx := context.Background()
+	if err := ApplyPostgresMigrations(ctx, pool); err != nil {
+		t.Fatal(err)
+	}
+	path := writePostgresTestKey(t)
+	keys, err := masterkey.Load(masterkey.Config{CurrentPath: path})
+	if err != nil {
+		t.Fatal(err)
+	}
+	manager, err := NewPostgresManager(keys, testSchemas{}, pool)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := manager.CreateContext(ctx, validCreate()); !errors.Is(err, ErrStorage) {
+		t.Fatalf("mutation did not fail closed: %v", err)
+	}
+	var count int
+	if err := pool.QueryRow(ctx, "SELECT count(*) FROM credentials").Scan(&count); err != nil || count != 0 {
+		t.Fatalf("credential committed without audit count=%d err=%v", count, err)
 	}
 }
 

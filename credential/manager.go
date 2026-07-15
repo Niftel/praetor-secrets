@@ -195,7 +195,7 @@ func (m *Manager) ReplaceInputsContext(ctx context.Context, request ReplaceInput
 	if err != nil {
 		return Metadata{}, err
 	}
-	return m.backend.Update(ctx, request.OrganizationID, request.CredentialID, request.ExpectedVersion, next, record)
+	return m.backend.Update(ctx, request.OrganizationID, request.CredentialID, request.ExpectedVersion, next, record, "credential_inputs_replaced")
 }
 
 func (m *Manager) UpdateMetadata(request UpdateMetadataRequest) (Metadata, error) {
@@ -237,7 +237,7 @@ func (m *Manager) UpdateMetadataContext(ctx context.Context, request UpdateMetad
 	if err != nil {
 		return Metadata{}, err
 	}
-	return m.backend.Update(ctx, request.OrganizationID, request.CredentialID, request.ExpectedVersion, next, record)
+	return m.backend.Update(ctx, request.OrganizationID, request.CredentialID, request.ExpectedVersion, next, record, "credential_metadata_updated")
 }
 
 func (m *Manager) encrypt(metadata Metadata, inputs map[string]string) (envelope.Record, error) {

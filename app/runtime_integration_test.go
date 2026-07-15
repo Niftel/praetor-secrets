@@ -47,12 +47,13 @@ func TestRuntimeBootsWithDatabaseAndMTLS(t *testing.T) {
 	directory := t.TempDir()
 	databaseFile := writeFile(t, directory+"/database-url", []byte(databaseURL), 0o400)
 	masterFile := writeFile(t, directory+"/master-key", make([]byte, 32), 0o400)
+	auditFile := writeFile(t, directory+"/audit-key", make([]byte, 32), 0o400)
 	caFile, serverCertFile, serverKeyFile, clientCertificate, roots := testCertificates(t, directory)
 	config := Config{
 		ListenAddress: "127.0.0.1:0", HealthListenAddress: "127.0.0.1:0", TrustDomain: "praetor.local",
-		DatabaseURLFile: databaseFile, MasterKeyFile: masterFile, TLSCertificateFile: serverCertFile,
+		DatabaseURLFile: databaseFile, MasterKeyFile: masterFile, AuditKeyFile: auditFile, TLSCertificateFile: serverCertFile,
 		TLSPrivateKeyFile: serverKeyFile, ClientCAFile: caFile, ShutdownTimeout: 2 * time.Second,
-		MaxDatabaseConns: 2, MaxNetworkConns: 4,
+		MaxDatabaseConns: 2, MaxNetworkConns: 4, MaxPendingAuditEvents: 100,
 	}
 	runtime, err := Build(ctx, config)
 	if err != nil {

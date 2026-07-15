@@ -15,18 +15,20 @@ var (
 )
 
 type Config struct {
-	ListenAddress       string
-	HealthListenAddress string
-	TrustDomain         string
-	DatabaseURLFile     string
-	MasterKeyFile       string
-	PreviousKeyFile     string
-	TLSCertificateFile  string
-	TLSPrivateKeyFile   string
-	ClientCAFile        string
-	ShutdownTimeout     time.Duration
-	MaxDatabaseConns    int32
-	MaxNetworkConns     int
+	ListenAddress         string
+	HealthListenAddress   string
+	TrustDomain           string
+	DatabaseURLFile       string
+	MasterKeyFile         string
+	AuditKeyFile          string
+	PreviousKeyFile       string
+	TLSCertificateFile    string
+	TLSPrivateKeyFile     string
+	ClientCAFile          string
+	ShutdownTimeout       time.Duration
+	MaxDatabaseConns      int32
+	MaxNetworkConns       int
+	MaxPendingAuditEvents int64
 }
 
 func LoadConfig(lookup func(string) (string, bool)) (Config, error) {
@@ -54,6 +56,9 @@ func LoadConfig(lookup func(string) (string, bool)) (Config, error) {
 	if config.MasterKeyFile, ok = required("PRAETOR_SECRETS_MASTER_KEY_FILE"); !ok {
 		return Config{}, ErrConfiguration
 	}
+	if config.AuditKeyFile, ok = required("PRAETOR_SECRETS_AUDIT_KEY_FILE"); !ok {
+		return Config{}, ErrConfiguration
+	}
 	config.PreviousKeyFile, _ = lookup("PRAETOR_SECRETS_PREVIOUS_KEY_FILE")
 	if config.TLSCertificateFile, ok = required("PRAETOR_SECRETS_TLS_CERTIFICATE_FILE"); !ok {
 		return Config{}, ErrConfiguration
@@ -67,6 +72,7 @@ func LoadConfig(lookup func(string) (string, bool)) (Config, error) {
 	config.ShutdownTimeout = 20 * time.Second
 	config.MaxDatabaseConns = 10
 	config.MaxNetworkConns = 100
+	config.MaxPendingAuditEvents = 100000
 	if value, exists := lookup("PRAETOR_SECRETS_SHUTDOWN_TIMEOUT"); exists && value != "" {
 		duration, err := time.ParseDuration(value)
 		if err != nil || duration < time.Second || duration > 5*time.Minute {
@@ -88,6 +94,13 @@ func LoadConfig(lookup func(string) (string, bool)) (Config, error) {
 		}
 		config.MaxNetworkConns = parsed
 	}
+	if value, exists := lookup("PRAETOR_SECRETS_MAX_PENDING_AUDIT_EVENTS"); exists && value != "" {
+		parsed, err := strconv.ParseInt(value, 10, 64)
+		if err != nil || parsed < 1 || parsed > 10000000 {
+			return Config{}, ErrConfiguration
+		}
+		config.MaxPendingAuditEvents = parsed
+	}
 	if err := validateConfig(config); err != nil {
 		return Config{}, err
 	}
@@ -95,9 +108,9 @@ func LoadConfig(lookup func(string) (string, bool)) (Config, error) {
 }
 
 func validateConfig(config Config) error {
-	if config.DatabaseURLFile == "" || config.MasterKeyFile == "" || config.TLSCertificateFile == "" ||
+	if config.DatabaseURLFile == "" || config.MasterKeyFile == "" || config.AuditKeyFile == "" || config.TLSCertificateFile == "" ||
 		config.TLSPrivateKeyFile == "" || config.ClientCAFile == "" || config.ShutdownTimeout <= 0 ||
-		config.MaxDatabaseConns <= 0 || config.MaxNetworkConns <= 0 {
+		config.MaxDatabaseConns <= 0 || config.MaxNetworkConns <= 0 || config.MaxPendingAuditEvents <= 0 {
 		return ErrConfiguration
 	}
 	for _, address := range []string{config.ListenAddress, config.HealthListenAddress} {
