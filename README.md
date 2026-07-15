@@ -146,6 +146,17 @@ the exact `spiffe://<trust-domain>/workload/praetor-secrets` client identity.
 Its database URL and private key are likewise supplied only through restricted
 files; see the chart README for the deployment variables and Secret keys.
 
+For an isolated local cluster, `go run ./cmd/praetor-dev-bootstrap` generates
+short-lived development CAs, exact workload identities, random master/audit
+keys, and a `kubectl-secrets.sh` helper. Database URLs are read only from
+restricted files, generated material is written under a new mode-`0700`
+directory, and every output directory contains a deny-all `.gitignore`.
+The generator refuses to overwrite an existing directory. These development
+CAs must never be used outside a disposable local environment.
+The generated `clients` directory contains API, scheduler, executor, operator,
+and auditor certificates for local mTLS integration tests; it is not applied as
+a Kubernetes Secret by the helper.
+
 ## Audit spool
 
 Every PostgreSQL security-state mutation requires an audit spool append in the
