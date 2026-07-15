@@ -39,12 +39,14 @@ func TestAuditSinkRuntimeBootsAndAppendsOverMTLS(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer func() { _, _ = admin.Exec(context.Background(), `DROP SCHEMA "`+schema+`" CASCADE`) }()
-	poolConfig, err := pgxpool.ParseConfig(databaseURL)
+	databaseURI, err := url.Parse(databaseURL)
 	if err != nil {
 		t.Fatal(err)
 	}
-	poolConfig.ConnConfig.RuntimeParams["search_path"] = schema
-	databaseURL = poolConfig.ConnString()
+	query := databaseURI.Query()
+	query.Set("search_path", schema)
+	databaseURI.RawQuery = query.Encode()
+	databaseURL = databaseURI.String()
 	directory := t.TempDir()
 	caFile, certificateFile, keyFile, clientCertificate, roots := sinkTestCertificates(t, directory)
 	config := Config{
