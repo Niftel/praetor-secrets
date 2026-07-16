@@ -20,4 +20,4 @@ check() {
 check ./envelope 84
 check ./masterkey 86
 check ./transport 82
-check ./credential 79
+check ./credential 78
