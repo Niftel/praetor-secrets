@@ -177,7 +177,8 @@ func TestExecutorResolutionAndRouteSeparation(t *testing.T) {
 	recorder := httptest.NewRecorder()
 	server.ServeHTTP(recorder, request)
 	if recorder.Code != http.StatusOK || service.caller.Subject != "praetor-executor:worker-7" ||
-		recorder.Header().Get("Connection") != "close" || recorder.Header().Get("Content-Encoding") != "identity" {
+		recorder.Header().Get("Connection") != "close" || recorder.Header().Get("Content-Encoding") != "identity" ||
+		recorder.Header().Get("Cache-Control") != "no-store" || recorder.Header().Get("Pragma") != "no-cache" {
 		t.Fatalf("status=%d caller=%+v headers=%v body=%s", recorder.Code, service.caller, recorder.Header(), recorder.Body.String())
 	}
 	scheduler := verifiedRequest(t, http.MethodPost, path, body, "spiffe://praetor.local/workload/praetor-scheduler")
