@@ -259,7 +259,8 @@ func (spool *Spool) Verify(ctx context.Context, pool *pgxpool.Pool) error {
 
 func validate(event Event) error {
 	if event.SchemaVersion != SchemaVersion || event.Timestamp.IsZero() || !event.Timestamp.Equal(event.Timestamp.UTC()) ||
-		!token(event.EventType) || !token(event.Operation) || !token(event.Result) || !token(event.ReasonCode) {
+		!known(event.EventType, knownEventTypes) || !KnownOperation(event.Operation) ||
+		!known(event.Result, knownResults) || !token(event.ReasonCode) {
 		return ErrEvent
 	}
 	if event.LatencyClass != "" && !token(event.LatencyClass) {
@@ -271,6 +272,11 @@ func validate(event Event) error {
 		}
 	}
 	return nil
+}
+
+func known(value string, vocabulary map[string]struct{}) bool {
+	_, ok := vocabulary[value]
+	return ok
 }
 
 func (spool *Spool) PendingCount(ctx context.Context, pool *pgxpool.Pool) (int64, int64, error) {

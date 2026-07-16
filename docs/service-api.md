@@ -558,6 +558,26 @@ one state-transition event. Required fields:
 - operation, result, stable reason code, and latency class; and
 - policy, schema, credential, and key version numbers where non-secret.
 
+The operation vocabulary is fixed in code. Grant and revoke are represented by
+the actual capability lifecycle rather than generic RBAC labels:
+
+| Security action | Audit operation |
+|---|---|
+| Create credential | `credential_created` |
+| Replace secret inputs | `credential_inputs_replaced` |
+| Update metadata | `credential_metadata_updated` |
+| Retire credential | `credential_retired` |
+| Grant a run access to one credential version | `run_binding_registered` |
+| Revoke that access | `run_binding_canceled`, `run_binding_expired`, or `run_binding_exhausted` |
+| Resolve a bound credential | `credential_resolved` |
+| Start or resume master-key rotation | `master_key_rotation_started` or `master_key_rotation_resumed` |
+| Rewrap one credential version | `credential_key_rotated` |
+| Finalize master-key rotation | `master_key_rotation_finalized` |
+| Validate disaster recovery | `recovery_validation_started` and `recovery_validation_finished` |
+
+Rotation and recovery operations are reserved here as stable contracts. Their
+state machines emit these operations when those features are implemented.
+
 Forbidden fields:
 
 - request or response bodies;

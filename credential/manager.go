@@ -14,6 +14,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/Niftel/praetor-secrets/audit"
 	"github.com/Niftel/praetor-secrets/envelope"
 	"github.com/Niftel/praetor-secrets/masterkey"
 )
@@ -208,7 +209,7 @@ func (m *Manager) ReplaceInputsContext(ctx context.Context, request ReplaceInput
 	if err != nil {
 		return Metadata{}, err
 	}
-	return m.backend.Update(ctx, request.OrganizationID, request.CredentialID, request.ExpectedVersion, next, record, "credential_inputs_replaced")
+	return m.backend.Update(ctx, request.OrganizationID, request.CredentialID, request.ExpectedVersion, next, record, audit.OperationCredentialInputsReplaced)
 }
 
 func (m *Manager) UpdateMetadata(request UpdateMetadataRequest) (Metadata, error) {
@@ -253,7 +254,7 @@ func (m *Manager) UpdateMetadataContext(ctx context.Context, request UpdateMetad
 	if err != nil {
 		return Metadata{}, err
 	}
-	return m.backend.Update(ctx, request.OrganizationID, request.CredentialID, request.ExpectedVersion, next, record, "credential_metadata_updated")
+	return m.backend.Update(ctx, request.OrganizationID, request.CredentialID, request.ExpectedVersion, next, record, audit.OperationCredentialMetadataUpdated)
 }
 
 func (m *Manager) Retire(request RetireRequest) (Metadata, error) {
@@ -298,7 +299,7 @@ func (m *Manager) RetireContext(ctx context.Context, request RetireRequest) (Met
 	if err != nil {
 		return Metadata{}, err
 	}
-	return m.backend.Update(ctx, request.OrganizationID, request.CredentialID, request.ExpectedVersion, next, record, "credential_retired")
+	return m.backend.Update(ctx, request.OrganizationID, request.CredentialID, request.ExpectedVersion, next, record, audit.OperationCredentialRetired)
 }
 
 func (m *Manager) encrypt(metadata Metadata, inputs map[string]string) (envelope.Record, error) {

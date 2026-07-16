@@ -151,32 +151,38 @@ func newRequestID() string {
 func requestOperation(method, path string) string {
 	switch {
 	case method == http.MethodPost && path == "/internal/v1/run-bindings":
-		return "run_binding_registered"
+		return audit.OperationRunBindingRegistered
 	case method == http.MethodGet && path == "/internal/v1/security-status":
-		return "security_status_read"
+		return audit.OperationSecurityStatusRead
 	case method == http.MethodPost && path == "/internal/v1/credentials":
-		return "credential_created"
+		return audit.OperationCredentialCreated
 	case method == http.MethodGet && strings.HasPrefix(path, "/internal/v1/credentials/"):
-		return "credential_read"
+		return audit.OperationCredentialRead
 	case method == http.MethodPut && strings.HasSuffix(path, "/inputs"):
-		return "credential_inputs_replaced"
+		return audit.OperationCredentialInputsReplaced
 	case method == http.MethodPatch && strings.HasPrefix(path, "/internal/v1/credentials/"):
-		return "credential_metadata_updated"
+		return audit.OperationCredentialMetadataUpdated
 	case method == http.MethodPost && strings.HasSuffix(path, "/retire"):
-		return "credential_retired"
+		return audit.OperationCredentialRetired
 	case method == http.MethodGet && strings.HasPrefix(path, "/internal/v1/run-bindings/"):
-		return "run_binding_inspected"
+		return audit.OperationRunBindingInspected
 	case method == http.MethodPost && strings.HasSuffix(path, "/cancel"):
-		return "run_binding_canceled"
+		return audit.OperationRunBindingCanceled
 	case method == http.MethodPost && strings.HasSuffix(path, "/credential:resolve"):
-		return "credential_resolved"
+		return audit.OperationCredentialResolved
 	default:
-		return "unknown_route"
+		return audit.OperationUnknownRoute
 	}
 }
 
 func transactionallyAudited(operation string) bool {
-	return operation == "run_binding_registered" || operation == "run_binding_canceled" || operation == "credential_resolved" || operation == "credential_created" || operation == "credential_inputs_replaced" || operation == "credential_metadata_updated" || operation == "credential_retired"
+	return operation == audit.OperationRunBindingRegistered ||
+		operation == audit.OperationRunBindingCanceled ||
+		operation == audit.OperationCredentialResolved ||
+		operation == audit.OperationCredentialCreated ||
+		operation == audit.OperationCredentialInputsReplaced ||
+		operation == audit.OperationCredentialMetadataUpdated ||
+		operation == audit.OperationCredentialRetired
 }
 
 type actorBody struct {

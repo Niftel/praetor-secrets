@@ -50,7 +50,7 @@ func (b *postgresBackend) RegisterBinding(ctx context.Context, registration bind
 		if !bytes.Equal(existingDigest, registration.digest[:]) {
 			return Binding{}, ErrBindingConflict
 		}
-		if err := b.appendCompletion(ctx, tx, bindingAudit("run_binding_registered", existing, "praetor-scheduler", "completed", registration.now)); err != nil {
+		if err := b.appendCompletion(ctx, tx, bindingAudit(audit.OperationRunBindingRegistered, existing, "praetor-scheduler", audit.ReasonCompleted, registration.now)); err != nil {
 			return Binding{}, err
 		}
 		if err := tx.Commit(ctx); err != nil {
@@ -100,7 +100,7 @@ func (b *postgresBackend) RegisterBinding(ctx context.Context, registration bind
 	if err != nil {
 		return Binding{}, ErrStorage
 	}
-	if err := b.appendSuccessfulTransition(ctx, tx, bindingAudit("run_binding_registered", binding, "praetor-scheduler", "completed", registration.now)); err != nil {
+	if err := b.appendSuccessfulTransition(ctx, tx, bindingAudit(audit.OperationRunBindingRegistered, binding, "praetor-scheduler", audit.ReasonCompleted, registration.now)); err != nil {
 		return Binding{}, err
 	}
 	if err := tx.Commit(ctx); err != nil {
@@ -143,10 +143,10 @@ func (b *postgresBackend) CancelBinding(ctx context.Context, runID, dispatchID, 
 		if _, err := tx.Exec(ctx, "UPDATE run_bindings SET state = $1, cancel_reason = $2, updated_at = $3 WHERE run_id = $4", binding.State, reason, now, runID); err != nil {
 			return Binding{}, ErrStorage
 		}
-		if err := b.appendSuccessfulTransition(ctx, tx, bindingAudit("run_binding_canceled", binding, "praetor-scheduler", reason, now)); err != nil {
+		if err := b.appendSuccessfulTransition(ctx, tx, bindingAudit(audit.OperationRunBindingCanceled, binding, "praetor-scheduler", reason, now)); err != nil {
 			return Binding{}, err
 		}
-	} else if err := b.appendCompletion(ctx, tx, bindingAudit("run_binding_canceled", binding, "praetor-scheduler", "completed", now)); err != nil {
+	} else if err := b.appendCompletion(ctx, tx, bindingAudit(audit.OperationRunBindingCanceled, binding, "praetor-scheduler", audit.ReasonCompleted, now)); err != nil {
 		return Binding{}, err
 	}
 	if err := tx.Commit(ctx); err != nil {
@@ -183,7 +183,7 @@ func (b *postgresBackend) ClaimResolution(ctx context.Context, claim resolutionC
 				return Binding{}, time.Time{}, ErrStorage
 			}
 			binding.State = BindingExpired
-			if err := b.appendAudit(ctx, tx, bindingAudit("run_binding_expired", binding, claim.executorIdentity, "binding_expired", claim.now)); err != nil {
+			if err := b.appendAudit(ctx, tx, bindingAudit(audit.OperationRunBindingExpired, binding, claim.executorIdentity, "binding_expired", claim.now)); err != nil {
 				return Binding{}, time.Time{}, err
 			}
 		}
@@ -215,7 +215,7 @@ func (b *postgresBackend) ClaimResolution(ctx context.Context, claim resolutionC
 			!bytes.Equal(attemptDigest, claim.digest[:]) || !claim.now.Before(attemptExpiry) {
 			return Binding{}, time.Time{}, ErrAttemptConflict
 		}
-		if err := b.appendCompletion(ctx, tx, bindingAudit("credential_resolved", binding, claim.executorIdentity, "completed", claim.now)); err != nil {
+		if err := b.appendCompletion(ctx, tx, bindingAudit(audit.OperationCredentialResolved, binding, claim.executorIdentity, audit.ReasonCompleted, claim.now)); err != nil {
 			return Binding{}, time.Time{}, err
 		}
 		if err := tx.Commit(ctx); err != nil {
@@ -232,7 +232,7 @@ func (b *postgresBackend) ClaimResolution(ctx context.Context, claim resolutionC
 				return Binding{}, time.Time{}, ErrStorage
 			}
 			binding.State = BindingExhausted
-			if err := b.appendAudit(ctx, tx, bindingAudit("run_binding_exhausted", binding, claim.executorIdentity, "resolution_limit", claim.now)); err != nil {
+			if err := b.appendAudit(ctx, tx, bindingAudit(audit.OperationRunBindingExhausted, binding, claim.executorIdentity, "resolution_limit", claim.now)); err != nil {
 				return Binding{}, time.Time{}, err
 			}
 		}
@@ -266,7 +266,7 @@ func (b *postgresBackend) ClaimResolution(ctx context.Context, claim resolutionC
 		binding.ResolutionCount, binding.State, binding.UpdatedAt, binding.RunID); err != nil {
 		return Binding{}, time.Time{}, ErrStorage
 	}
-	if err := b.appendSuccessfulTransition(ctx, tx, bindingAudit("credential_resolved", binding, claim.executorIdentity, "completed", claim.now)); err != nil {
+	if err := b.appendSuccessfulTransition(ctx, tx, bindingAudit(audit.OperationCredentialResolved, binding, claim.executorIdentity, audit.ReasonCompleted, claim.now)); err != nil {
 		return Binding{}, time.Time{}, err
 	}
 	if err := tx.Commit(ctx); err != nil {
@@ -276,7 +276,7 @@ func (b *postgresBackend) ClaimResolution(ctx context.Context, claim resolutionC
 }
 
 func bindingAudit(operation string, binding Binding, workload, reason string, timestamp time.Time) audit.Event {
-	return audit.Event{SchemaVersion: audit.SchemaVersion, Timestamp: timestamp.UTC(), EventType: "state_transition", Operation: operation, Result: "success", ReasonCode: reason, WorkloadIdentity: workload, OrganizationID: binding.OrganizationID, CredentialID: binding.CredentialID, RunID: binding.RunID, ExecutorIdentity: binding.ExecutorIdentity, CredentialVersion: binding.CredentialVersion}
+	return audit.Event{SchemaVersion: audit.SchemaVersion, Timestamp: timestamp.UTC(), EventType: audit.EventTypeStateTransition, Operation: operation, Result: audit.ResultSuccess, ReasonCode: reason, WorkloadIdentity: workload, OrganizationID: binding.OrganizationID, CredentialID: binding.CredentialID, RunID: binding.RunID, ExecutorIdentity: binding.ExecutorIdentity, CredentialVersion: binding.CredentialVersion}
 }
 
 func postgresBoundVersion(ctx context.Context, tx pgx.Tx, binding Binding) (boundRecord, error) {
