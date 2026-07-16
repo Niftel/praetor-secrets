@@ -41,10 +41,23 @@ type fakeService struct {
 	batchSize          int
 	credentialRotation credential.CredentialRotationRequest
 	keyStatus          credential.KeyStatus
+	recovery           credential.RecoveryValidation
+	backup             credential.BackupSet
 }
 
 func (service *fakeService) KeyStatus(context.Context) (credential.KeyStatus, error) {
 	return service.keyStatus, service.err
+}
+func (service *fakeService) ValidateRecovery(context.Context, int) (credential.RecoveryValidation, error) {
+	return service.recovery, service.err
+}
+func (service *fakeService) RegisterBackup(_ context.Context, b credential.BackupSet) (credential.BackupSet, error) {
+	service.backup = b
+	return b, service.err
+}
+func (service *fakeService) ExpireBackup(_ context.Context, id string) (credential.BackupSet, error) {
+	service.backup = credential.BackupSet{ID: id}
+	return credential.BackupSet{ID: id}, service.err
 }
 
 func (service *fakeService) StartMasterKeyRotation(context.Context) (credential.Rotation, error) {
@@ -433,6 +446,62 @@ func TestRotationRoutesRejectMalformedRequests(t *testing.T) {
 		server.ServeHTTP(recorder, request)
 		if recorder.Code != test.status {
 			t.Fatalf("%s %s status=%d want=%d body=%s", test.method, test.path, recorder.Code, test.status, recorder.Body.String())
+		}
+	}
+}
+
+func TestRecoveryAndBackupOperatorRoutes(t *testing.T) {
+	service := &fakeService{recovery: credential.RecoveryValidation{ValidatedRecords: 2, TotalRecords: 3, MetadataSHA256: strings.Repeat("a", 64)}}
+	server := newTestServer(t, service)
+	identity := "spiffe://praetor.local/workload/praetor-secrets-operator"
+	request := verifiedRequest(t, http.MethodPost, "/internal/v1/operations/recovery-validations", `{"sample_size":2}`, identity)
+	recorder := httptest.NewRecorder()
+	server.ServeHTTP(recorder, request)
+	if recorder.Code != http.StatusOK || !strings.Contains(recorder.Body.String(), `"validated_records":2`) {
+		t.Fatalf("recovery=%d %s", recorder.Code, recorder.Body.String())
+	}
+	body := `{"id":"backup-1","artifact_sha256":"` + strings.Repeat("b", 64) + `","key_ids":["key-1"],"created_at":"2026-07-16T12:00:00Z","retain_until":"2026-07-17T12:00:00Z"}`
+	request = verifiedRequest(t, http.MethodPost, "/internal/v1/operations/backups", body, identity)
+	recorder = httptest.NewRecorder()
+	server.ServeHTTP(recorder, request)
+	if recorder.Code != http.StatusCreated || service.backup.ID != "backup-1" {
+		t.Fatalf("backup=%d %+v", recorder.Code, service.backup)
+	}
+	request = verifiedRequest(t, http.MethodPost, "/internal/v1/operations/backups/backup-1/expire", "", identity)
+	recorder = httptest.NewRecorder()
+	server.ServeHTTP(recorder, request)
+	if recorder.Code != http.StatusOK || service.backup.ID != "backup-1" {
+		t.Fatalf("expire=%d %+v", recorder.Code, service.backup)
+	}
+	request = verifiedRequest(t, http.MethodPost, "/internal/v1/operations/recovery-validations", `{"sample_size":2}`, "spiffe://praetor.local/workload/praetor-api")
+	recorder = httptest.NewRecorder()
+	server.ServeHTTP(recorder, request)
+	if recorder.Code != http.StatusForbidden {
+		t.Fatalf("api recovery=%d", recorder.Code)
+	}
+}
+
+func TestRecoveryAndBackupRouteFailures(t *testing.T) {
+	identity := "spiffe://praetor.local/workload/praetor-secrets-operator"
+	tests := []struct {
+		path, body string
+		err        error
+		status     int
+	}{
+		{"/internal/v1/operations/recovery-validations", "{", nil, 400},
+		{"/internal/v1/operations/recovery-validations", `{"sample_size":1}`, credential.ErrRecoveryValidation, 409},
+		{"/internal/v1/operations/backups", "{", nil, 400},
+		{"/internal/v1/operations/backups", `{"id":"x"}`, credential.ErrBackupConflict, 409},
+		{"/internal/v1/operations/backups//expire", "", nil, 404},
+		{"/internal/v1/operations/backups/a/b/expire", "", nil, 404},
+	}
+	for _, test := range tests {
+		server := newTestServer(t, &fakeService{err: test.err})
+		request := verifiedRequest(t, http.MethodPost, test.path, test.body, identity)
+		recorder := httptest.NewRecorder()
+		server.ServeHTTP(recorder, request)
+		if recorder.Code != test.status {
+			t.Fatalf("%s status=%d want=%d body=%s", test.path, recorder.Code, test.status, recorder.Body.String())
 		}
 	}
 }

@@ -167,6 +167,22 @@ scheduler claim-listener certificate, the executor client CA, and the executor's
 separate Secrets server CA key expected by the Praetor chart. The `clients`
 directory is not applied as a Kubernetes Secret by the helper.
 
+## Backup and disaster recovery
+
+[`scripts/backup-encrypted-database.sh`](scripts/backup-encrypted-database.sh)
+creates a PostgreSQL custom-format dump and a mode-restricted manifest containing
+only its SHA-256, required key IDs, and retention dates. The database dump and
+master-key backups must be stored in separate access-control domains. The script
+never copies or prints master-key material.
+
+[`scripts/restore-recovery-drill.sh`](scripts/restore-recovery-drill.sh) verifies
+the dump digest, restores into a dedicated disposable database, and runs an
+operator-supplied isolated validation command passed as distinct script
+arguments, without shell evaluation. Point that command at
+`POST /internal/v1/operations/recovery-validations`; the response contains only
+counts and a non-secret metadata digest. A missing or wrong key fails closed.
+Key loss is unrecoverable by design.
+
 ## Audit spool
 
 Every PostgreSQL security-state mutation requires an audit spool append in the

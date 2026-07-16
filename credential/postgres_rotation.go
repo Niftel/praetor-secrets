@@ -73,7 +73,7 @@ func (b *postgresBackend) GetRotation(ctx context.Context, id string) (Rotation,
 }
 
 func (b *postgresBackend) KeyStatus(ctx context.Context, current, previous string) (KeyStatus, error) {
-	status := KeyStatus{CurrentKeyID: current, PreviousKeyID: previous, RecordCounts: map[string]int64{}}
+	status := KeyStatus{CurrentKeyID: current, PreviousKeyID: previous, RecordCounts: map[string]int64{}, RetainedBackupReferences: map[string]int64{}}
 	rows, err := b.pool.Query(ctx, `SELECT master_key_id, count(*) FROM credential_versions GROUP BY master_key_id`)
 	if err != nil {
 		return KeyStatus{}, ErrStorage
@@ -100,6 +100,21 @@ func (b *postgresBackend) KeyStatus(ctx context.Context, current, previous strin
 		return KeyStatus{}, ErrStorage
 	}
 	status.DatabaseReferencesCleared = previous != "" && status.RecordCounts[previous] == 0 && status.ActiveRotation == nil
+	rows, err = b.pool.Query(ctx, `SELECT key_id,count(*) FROM backup_sets, unnest(key_ids) key_id WHERE expired_at IS NULL GROUP BY key_id`)
+	if err != nil {
+		return KeyStatus{}, ErrStorage
+	}
+	for rows.Next() {
+		var id string
+		var count int64
+		if err := rows.Scan(&id, &count); err != nil {
+			rows.Close()
+			return KeyStatus{}, ErrStorage
+		}
+		status.RetainedBackupReferences[id] = count
+	}
+	rows.Close()
+	status.BackupReferencesCleared = previous != "" && status.RetainedBackupReferences[previous] == 0
 	return status, nil
 }
 
