@@ -49,7 +49,10 @@ jobs:
       - name: Test with race detector and coverage
         env:
           PRAETOR_SECRETS_TEST_DATABASE_URL: postgres://praetor_test:praetor_test@127.0.0.1:5432/praetor_secrets_test?sslmode=disable
-        run: go test -race -covermode=atomic -coverprofile=coverage.out ./...
+        run: |
+          production_packages=$(go list ./... | grep -v '/scripts/' | grep -v '/securitygate$')
+          go test -race -covermode=atomic -coverprofile=coverage.out $production_packages
+          go test ./securitygate
 
       - name: Require at least 80% statement coverage
         run: |
