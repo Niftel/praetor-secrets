@@ -25,6 +25,12 @@ type CredentialService interface {
 	InspectBinding(context.Context, credential.WorkloadIdentity, string) (credential.Binding, error)
 	CancelBinding(context.Context, credential.WorkloadIdentity, credential.CancelBindingRequest) (credential.Binding, error)
 	Resolve(context.Context, credential.WorkloadIdentity, credential.ResolveRequest) (credential.ResolvedCredential, error)
+	StartMasterKeyRotation(context.Context) (credential.Rotation, error)
+	GetMasterKeyRotation(context.Context, string) (credential.Rotation, error)
+	ResumeMasterKeyRotation(context.Context, string, int) (credential.Rotation, error)
+	FinalizeMasterKeyRotation(context.Context, string) (credential.Rotation, error)
+	RotateCredentialKey(context.Context, credential.CredentialRotationRequest) error
+	KeyStatus(context.Context) (credential.KeyStatus, error)
 }
 
 type Server struct {
@@ -87,6 +93,7 @@ func (server *Server) ServeHTTP(writer http.ResponseWriter, request *http.Reques
 			}
 			event := audit.Completion(request.Context(), result, reason, time.Now().UTC())
 			event.RunID = requestRunID(request.URL.EscapedPath())
+			event.RotationID = requestRotationID(request.URL.EscapedPath())
 			_ = server.auditor.Record(request.Context(), event)
 		}
 	}()
@@ -98,6 +105,8 @@ func (server *Server) ServeHTTP(writer http.ResponseWriter, request *http.Reques
 	switch {
 	case request.Method == http.MethodGet && path == "/internal/v1/security-status":
 		server.securityStatus(writer, request, identity)
+	case strings.HasPrefix(path, "/internal/v1/operations/"):
+		server.operationRoute(writer, request, identity, path)
 	case request.Method == http.MethodPost && path == "/internal/v1/credentials":
 		server.createCredential(writer, request, identity)
 	case strings.HasPrefix(path, "/internal/v1/credentials/"):
@@ -154,6 +163,18 @@ func requestOperation(method, path string) string {
 		return audit.OperationRunBindingRegistered
 	case method == http.MethodGet && path == "/internal/v1/security-status":
 		return audit.OperationSecurityStatusRead
+	case method == http.MethodGet && path == "/internal/v1/operations/key-status":
+		return audit.OperationKeyStatusRead
+	case method == http.MethodPost && path == "/internal/v1/operations/rotations":
+		return audit.OperationMasterKeyRotationStarted
+	case method == http.MethodGet && strings.HasPrefix(path, "/internal/v1/operations/rotations/"):
+		return audit.OperationMasterKeyRotationInspected
+	case method == http.MethodPost && strings.HasSuffix(path, "/resume"):
+		return audit.OperationMasterKeyRotationResumed
+	case method == http.MethodPost && strings.HasSuffix(path, "/finalize"):
+		return audit.OperationMasterKeyRotationFinalized
+	case method == http.MethodPost && strings.HasPrefix(path, "/internal/v1/operations/credentials/") && strings.HasSuffix(path, "/rotate"):
+		return audit.OperationCredentialKeyRotated
 	case method == http.MethodPost && path == "/internal/v1/credentials":
 		return audit.OperationCredentialCreated
 	case method == http.MethodGet && strings.HasPrefix(path, "/internal/v1/credentials/"):
@@ -182,7 +203,11 @@ func transactionallyAudited(operation string) bool {
 		operation == audit.OperationCredentialCreated ||
 		operation == audit.OperationCredentialInputsReplaced ||
 		operation == audit.OperationCredentialMetadataUpdated ||
-		operation == audit.OperationCredentialRetired
+		operation == audit.OperationCredentialRetired ||
+		operation == audit.OperationMasterKeyRotationStarted ||
+		operation == audit.OperationMasterKeyRotationResumed ||
+		operation == audit.OperationMasterKeyRotationFinalized ||
+		operation == audit.OperationCredentialKeyRotated
 }
 
 type actorBody struct {
@@ -511,6 +536,12 @@ func writeServiceProblem(writer http.ResponseWriter, err error) {
 		writeProblem(writer, http.StatusConflict, "credential_not_active")
 	case errors.Is(err, credential.ErrAttemptConflict):
 		writeProblem(writer, http.StatusConflict, "attempt_conflict")
+	case errors.Is(err, credential.ErrRotationConflict):
+		writeProblem(writer, http.StatusConflict, "rotation_conflict")
+	case errors.Is(err, credential.ErrRotationNotReady):
+		writeProblem(writer, http.StatusConflict, "rotation_not_ready")
+	case errors.Is(err, credential.ErrRotationUnavailable):
+		writeProblem(writer, http.StatusServiceUnavailable, "rotation_unavailable")
 	case errors.Is(err, credential.ErrStorage):
 		writeProblem(writer, http.StatusServiceUnavailable, "service_unavailable")
 	default:

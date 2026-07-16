@@ -114,6 +114,14 @@ Required environment variables:
 | `PRAETOR_SECRETS_AUDIT_SINK_PRIVATE_KEY_FILE` | restricted outbound client private key |
 
 `PRAETOR_SECRETS_PREVIOUS_KEY_FILE` is optional during controlled rotation.
+During rotation, mount the new key as the current key and the former current key
+as the previous key. Use the operator-only key-status and rotation endpoints to
+rewrap bounded batches. Do not remove the previous-key mount until the rotation
+is finalized, key status reports `database_references_cleared: true`, and backup
+retention no longer requires the old key. Restarting the service during a
+rotation is supported; progress is durable in PostgreSQL and resume processes
+only records still referencing the previous key.
+
 Optional bounded resource settings are `PRAETOR_SECRETS_SHUTDOWN_TIMEOUT`
 (default `20s`), `PRAETOR_SECRETS_MAX_DATABASE_CONNECTIONS` (default `10`),
 and `PRAETOR_SECRETS_MAX_NETWORK_CONNECTIONS` (default `100`).

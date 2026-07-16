@@ -92,6 +92,26 @@ func writePostgresTestKey(t *testing.T) string {
 	return path
 }
 
+func postgresRotationManager(t *testing.T, pool *pgxpool.Pool, currentPath, previousPath string) *Manager {
+	t.Helper()
+	keys, err := masterkey.Load(masterkey.Config{CurrentPath: currentPath, PreviousPath: previousPath})
+	if err != nil {
+		t.Fatal(err)
+	}
+	manager, err := NewPostgresManager(keys, testSchemas{}, pool)
+	if err != nil {
+		t.Fatal(err)
+	}
+	spool, err := audit.New(bytes.Repeat([]byte{0x25}, 32), 10000)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := manager.RequireAuditSpool(spool); err != nil {
+		t.Fatal(err)
+	}
+	return manager
+}
+
 func TestPostgresCredentialLifecycle(t *testing.T) {
 	pool := postgresTestPool(t)
 	ctx := context.Background()
@@ -168,6 +188,147 @@ func TestPostgresCredentialLifecycle(t *testing.T) {
 	var versionCount int
 	if err := pool.QueryRow(ctx, "SELECT count(*) FROM credential_versions WHERE credential_id = $1", created.ID).Scan(&versionCount); err != nil || versionCount != 4 {
 		t.Fatalf("version history count=%d err=%v", versionCount, err)
+	}
+}
+
+func TestPostgresMasterKeyRotationResumesAfterManagerRestart(t *testing.T) {
+	pool := postgresTestPool(t)
+	ctx := context.Background()
+	if err := ApplyPostgresMigrations(ctx, pool); err != nil {
+		t.Fatal(err)
+	}
+	oldPath := t.TempDir() + "/old-key"
+	newPath := t.TempDir() + "/new-key"
+	if err := os.WriteFile(oldPath, bytes.Repeat([]byte{0x61}, 32), 0o400); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(newPath, bytes.Repeat([]byte{0x62}, 32), 0o400); err != nil {
+		t.Fatal(err)
+	}
+	oldManager := postgresRotationManager(t, pool, oldPath, "")
+	firstRequest := validCreate()
+	firstRequest.IdempotencyKey = "rotation-create-1"
+	first, err := oldManager.CreateContext(audit.WithRequest(ctx, audit.Request{
+		ID: "create-1", WorkloadIdentity: "praetor-api", Operation: audit.OperationCredentialCreated, StartedAt: time.Now().UTC(),
+	}), firstRequest)
+	if err != nil {
+		t.Fatal(err)
+	}
+	secondRequest := validCreate()
+	secondRequest.IdempotencyKey = "rotation-create-2"
+	secondRequest.Name = "second"
+	second, err := oldManager.CreateContext(audit.WithRequest(ctx, audit.Request{
+		ID: "create-2", WorkloadIdentity: "praetor-api", Operation: audit.OperationCredentialCreated, StartedAt: time.Now().UTC(),
+	}), secondRequest)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	manager := postgresRotationManager(t, pool, newPath, oldPath)
+	rotationContext := audit.WithRequest(ctx, audit.Request{
+		ID: "rotation-start", WorkloadIdentity: "praetor-secrets-operator",
+		Operation: audit.OperationMasterKeyRotationStarted, StartedAt: time.Now().UTC(),
+	})
+	rotation, err := manager.StartMasterKeyRotation(rotationContext)
+	if err != nil || rotation.TotalRecords != 2 {
+		t.Fatalf("start=%+v err=%v", rotation, err)
+	}
+	if _, err := manager.FinalizeMasterKeyRotation(rotationContext, rotation.ID); !errors.Is(err, ErrRotationNotReady) {
+		t.Fatalf("premature finalize: %v", err)
+	}
+	resumeContext := audit.WithRequest(ctx, audit.Request{
+		ID: "rotation-resume-1", WorkloadIdentity: "praetor-secrets-operator",
+		Operation: audit.OperationMasterKeyRotationResumed, StartedAt: time.Now().UTC(),
+	})
+	rotation, err = manager.ResumeMasterKeyRotation(resumeContext, rotation.ID, 1)
+	if err != nil || rotation.ProcessedRecords != 1 || rotation.State != RotationRunning {
+		t.Fatalf("first resume=%+v err=%v", rotation, err)
+	}
+
+	// Reconstructing the manager simulates process interruption and proves that
+	// progress is durable rather than held in memory.
+	manager = postgresRotationManager(t, pool, newPath, oldPath)
+	resumeContext = audit.WithRequest(ctx, audit.Request{
+		ID: "rotation-resume-2", WorkloadIdentity: "praetor-secrets-operator",
+		Operation: audit.OperationMasterKeyRotationResumed, StartedAt: time.Now().UTC(),
+	})
+	rotation, err = manager.ResumeMasterKeyRotation(resumeContext, rotation.ID, 10)
+	if err != nil || rotation.State != RotationReady || rotation.ProcessedRecords != 2 {
+		t.Fatalf("resumed after restart=%+v err=%v", rotation, err)
+	}
+	finalizeContext := audit.WithRequest(ctx, audit.Request{
+		ID: "rotation-finalize", WorkloadIdentity: "praetor-secrets-operator",
+		Operation: audit.OperationMasterKeyRotationFinalized, StartedAt: time.Now().UTC(),
+	})
+	rotation, err = manager.FinalizeMasterKeyRotation(finalizeContext, rotation.ID)
+	if err != nil || rotation.State != RotationFinalized {
+		t.Fatalf("finalize=%+v err=%v", rotation, err)
+	}
+	var oldCount int64
+	if err := pool.QueryRow(ctx, `SELECT count(*) FROM credential_versions WHERE master_key_id=$1`, manager.keys.Previous.ID()).Scan(&oldCount); err != nil || oldCount != 0 {
+		t.Fatalf("old-key references=%d err=%v", oldCount, err)
+	}
+	for _, metadata := range []Metadata{first, second} {
+		stored, record, err := manager.backend.Get(ctx, metadata.OrganizationID, metadata.ID)
+		if err != nil || record.MasterKeyID != manager.keys.Current.ID() {
+			t.Fatalf("stored=%+v key=%q err=%v", stored, record.MasterKeyID, err)
+		}
+		plaintext, err := envelope.Decrypt(record, envelopeContext(stored), manager.keys.Keyring())
+		if err != nil || !bytes.Contains(plaintext, []byte("very-secret-value")) {
+			t.Fatalf("rotated record unavailable: %v", err)
+		}
+		wipe(plaintext)
+	}
+}
+
+func TestPostgresPerCredentialRotationAndKeyStatus(t *testing.T) {
+	pool := postgresTestPool(t)
+	ctx := context.Background()
+	if err := ApplyPostgresMigrations(ctx, pool); err != nil {
+		t.Fatal(err)
+	}
+	keyPath := writePostgresTestKey(t)
+	manager := postgresRotationManager(t, pool, keyPath, "")
+	createContext := audit.WithRequest(ctx, audit.Request{
+		ID: "credential-create", WorkloadIdentity: "praetor-api",
+		Operation: audit.OperationCredentialCreated, StartedAt: time.Now().UTC(),
+	})
+	metadata, err := manager.CreateContext(createContext, validCreate())
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, before, err := manager.backend.Get(ctx, metadata.OrganizationID, metadata.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	rotateContext := audit.WithRequest(ctx, audit.Request{
+		ID: "credential-rotate", WorkloadIdentity: "praetor-secrets-operator",
+		Operation: audit.OperationCredentialKeyRotated, StartedAt: time.Now().UTC(),
+	})
+	if err := manager.RotateCredentialKey(rotateContext, CredentialRotationRequest{
+		OrganizationID: metadata.OrganizationID, CredentialID: metadata.ID, Version: metadata.Version,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	stored, after, err := manager.backend.Get(ctx, metadata.OrganizationID, metadata.ID)
+	if err != nil || before.RecordID == after.RecordID || bytes.Equal(before.Ciphertext, after.Ciphertext) {
+		t.Fatalf("before=%q after=%q stored=%+v err=%v", before.RecordID, after.RecordID, stored, err)
+	}
+	plaintext, err := envelope.Decrypt(after, envelopeContext(stored), manager.keys.Keyring())
+	if err != nil || !bytes.Contains(plaintext, []byte("very-secret-value")) {
+		t.Fatalf("rotated plaintext unavailable: %v", err)
+	}
+	wipe(plaintext)
+	status, err := manager.KeyStatus(ctx)
+	if err != nil || status.RecordCounts[manager.keys.Current.ID()] != 1 || status.DatabaseReferencesCleared {
+		t.Fatalf("status=%+v err=%v", status, err)
+	}
+	var events int64
+	if err := pool.QueryRow(ctx, `SELECT count(*) FROM audit_spool
+        WHERE event->>'operation'=$1 AND event->>'credential_id'=$2
+          AND event->>'event_type'=$3`,
+		audit.OperationCredentialKeyRotated, metadata.ID, audit.EventTypeStateTransition).Scan(&events); err != nil || events != 1 {
+		t.Fatalf("rotation audit events=%d err=%v", events, err)
 	}
 }
 

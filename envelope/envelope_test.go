@@ -192,11 +192,65 @@ func TestPayloadAADIsIndependentOfMasterKeyID(t *testing.T) {
 	}
 }
 
-func cloneRecord(in Record) Record {
-	out := in
-	out.PayloadNonce = append([]byte(nil), in.PayloadNonce...)
-	out.Ciphertext = append([]byte(nil), in.Ciphertext...)
-	out.WrapNonce = append([]byte(nil), in.WrapNonce...)
-	out.WrappedDataKey = append([]byte(nil), in.WrappedDataKey...)
-	return out
+func TestRewrapPreservesPayloadAndChangesWrappingKey(t *testing.T) {
+	oldKey := testKey(t, "old-key", 0x51)
+	newKey := testKey(t, "new-key", 0x52)
+	record, err := Encrypt([]byte("secret"), testContext(), oldKey, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	rewrapped, err := Rewrap(record, testContext(), map[string]MasterKey{oldKey.ID(): oldKey}, newKey, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if rewrapped.MasterKeyID != newKey.ID() || rewrapped.RecordID != record.RecordID ||
+		!bytes.Equal(rewrapped.PayloadNonce, record.PayloadNonce) ||
+		!bytes.Equal(rewrapped.Ciphertext, record.Ciphertext) ||
+		bytes.Equal(rewrapped.WrapNonce, record.WrapNonce) ||
+		bytes.Equal(rewrapped.WrappedDataKey, record.WrappedDataKey) {
+		t.Fatal("rewrap changed payload identity or reused wrapping material")
+	}
+	plaintext, err := Decrypt(rewrapped, testContext(), map[string]MasterKey{newKey.ID(): newKey})
+	if err != nil || !bytes.Equal(plaintext, []byte("secret")) {
+		t.Fatalf("rewrapped decrypt=%q err=%v", plaintext, err)
+	}
+}
+
+func TestRewrapFailsBeforeMutation(t *testing.T) {
+	oldKey := testKey(t, "old-key", 0x53)
+	newKey := testKey(t, "new-key", 0x54)
+	record, err := Encrypt([]byte("secret"), testContext(), oldKey, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	tampered := cloneRecord(record)
+	tampered.Ciphertext[0] ^= 1
+	if rotated, err := Rewrap(tampered, testContext(), map[string]MasterKey{oldKey.ID(): oldKey}, newKey, nil); !errors.Is(err, ErrAuthentication) || rotated.RecordID != "" {
+		t.Fatalf("tampered rewrap returned record=%+v err=%v", rotated, err)
+	}
+	if rotated, err := Rewrap(record, testContext(), map[string]MasterKey{oldKey.ID(): oldKey}, newKey, bytes.NewReader(nil)); err == nil || rotated.RecordID != "" {
+		t.Fatalf("entropy failure returned record=%+v err=%v", rotated, err)
+	}
+}
+
+func TestRotateDataKeyReencryptsCredential(t *testing.T) {
+	oldKey := testKey(t, "old-key", 0x55)
+	newKey := testKey(t, "new-key", 0x56)
+	record, err := Encrypt([]byte("secret"), testContext(), oldKey, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	rotated, err := RotateDataKey(record, testContext(), map[string]MasterKey{oldKey.ID(): oldKey}, newKey, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if rotated.RecordID == record.RecordID || bytes.Equal(rotated.PayloadNonce, record.PayloadNonce) ||
+		bytes.Equal(rotated.Ciphertext, record.Ciphertext) || rotated.MasterKeyID != newKey.ID() {
+		t.Fatal("data-key rotation reused record material")
+	}
+	plaintext, err := Decrypt(rotated, testContext(), map[string]MasterKey{newKey.ID(): newKey})
+	if err != nil || !bytes.Equal(plaintext, []byte("secret")) {
+		t.Fatalf("rotated decrypt=%q err=%v", plaintext, err)
+	}
 }

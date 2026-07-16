@@ -40,6 +40,7 @@ type Event struct {
 	OrganizationID    string    `json:"organization_id,omitempty"`
 	CredentialID      string    `json:"credential_id,omitempty"`
 	RunID             string    `json:"run_id,omitempty"`
+	RotationID        string    `json:"rotation_id,omitempty"`
 	ExecutorIdentity  string    `json:"executor_identity,omitempty"`
 	CredentialVersion uint64    `json:"credential_version,omitempty"`
 	CredentialSchema  uint32    `json:"credential_schema_version,omitempty"`
@@ -266,7 +267,7 @@ func validate(event Event) error {
 	if event.LatencyClass != "" && !token(event.LatencyClass) {
 		return ErrEvent
 	}
-	for _, value := range []string{event.WorkloadIdentity, event.HumanActor, event.OrganizationID, event.CredentialID, event.RunID, event.ExecutorIdentity, event.KeyVersion, event.RequestID} {
+	for _, value := range []string{event.WorkloadIdentity, event.HumanActor, event.OrganizationID, event.CredentialID, event.RunID, event.RotationID, event.ExecutorIdentity, event.KeyVersion, event.RequestID} {
 		if len(value) > 255 || strings.ContainsAny(value, "\x00\r\n") {
 			return ErrEvent
 		}

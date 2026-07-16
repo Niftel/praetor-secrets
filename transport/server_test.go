@@ -31,11 +31,40 @@ func (auditor *fakeAuditor) Status(context.Context) (audit.SecurityStatus, error
 }
 
 type fakeService struct {
-	caller       credential.WorkloadIdentity
-	registration credential.RegisterBindingRequest
-	cancel       credential.CancelBindingRequest
-	resolve      credential.ResolveRequest
-	err          error
+	caller             credential.WorkloadIdentity
+	registration       credential.RegisterBindingRequest
+	cancel             credential.CancelBindingRequest
+	resolve            credential.ResolveRequest
+	err                error
+	rotation           credential.Rotation
+	rotationID         string
+	batchSize          int
+	credentialRotation credential.CredentialRotationRequest
+	keyStatus          credential.KeyStatus
+}
+
+func (service *fakeService) KeyStatus(context.Context) (credential.KeyStatus, error) {
+	return service.keyStatus, service.err
+}
+
+func (service *fakeService) StartMasterKeyRotation(context.Context) (credential.Rotation, error) {
+	return service.rotation, service.err
+}
+func (service *fakeService) GetMasterKeyRotation(_ context.Context, id string) (credential.Rotation, error) {
+	service.rotationID = id
+	return service.rotation, service.err
+}
+func (service *fakeService) ResumeMasterKeyRotation(_ context.Context, id string, batchSize int) (credential.Rotation, error) {
+	service.rotationID, service.batchSize = id, batchSize
+	return service.rotation, service.err
+}
+func (service *fakeService) FinalizeMasterKeyRotation(_ context.Context, id string) (credential.Rotation, error) {
+	service.rotationID = id
+	return service.rotation, service.err
+}
+func (service *fakeService) RotateCredentialKey(_ context.Context, request credential.CredentialRotationRequest) error {
+	service.credentialRotation = request
+	return service.err
 }
 
 func (service *fakeService) CreateContext(_ context.Context, request credential.CreateRequest) (credential.Metadata, error) {
@@ -243,6 +272,9 @@ func TestServiceErrorMapping(t *testing.T) {
 		{credential.ErrBindingNotFound, 404},
 		{credential.ErrBindingConflict, 409},
 		{credential.ErrAttemptConflict, 409},
+		{credential.ErrRotationConflict, 409},
+		{credential.ErrRotationNotReady, 409},
+		{credential.ErrRotationUnavailable, 503},
 		{credential.ErrStorage, 503},
 		{errors.New("internal detail"), 500},
 	}
@@ -316,6 +348,111 @@ func TestProblemIncludesRequestID(t *testing.T) {
 	server.ServeHTTP(recorder, request)
 	if recorder.Code != http.StatusUnauthorized || !strings.Contains(recorder.Body.String(), "request_id") || recorder.Header().Get("X-Request-ID") == "" {
 		t.Fatalf("headers=%v body=%s", recorder.Header(), recorder.Body.String())
+	}
+}
+
+func TestRotationOperationsRequireOperatorIdentity(t *testing.T) {
+	rotationID := "68d977e4-3f0a-44cd-81cb-8965d5522996"
+	service := &fakeService{rotation: credential.Rotation{
+		ID: rotationID, SourceKeyID: "old-key", TargetKeyID: "new-key",
+		State: credential.RotationPending, TotalRecords: 2,
+	}, keyStatus: credential.KeyStatus{
+		CurrentKeyID: "new-key", PreviousKeyID: "old-key",
+		RecordCounts: map[string]int64{"old-key": 2},
+	}}
+	server := newTestServer(t, service)
+
+	request := verifiedRequest(t, http.MethodGet, "/internal/v1/operations/key-status", "", "spiffe://praetor.local/workload/praetor-secrets-operator")
+	recorder := httptest.NewRecorder()
+	server.ServeHTTP(recorder, request)
+	if recorder.Code != http.StatusOK || !strings.Contains(recorder.Body.String(), `"current_key_id":"new-key"`) {
+		t.Fatalf("key status=%d body=%s", recorder.Code, recorder.Body.String())
+	}
+
+	request = verifiedRequest(t, http.MethodPost, "/internal/v1/operations/rotations", "", "spiffe://praetor.local/workload/praetor-secrets-operator")
+	recorder = httptest.NewRecorder()
+	server.ServeHTTP(recorder, request)
+	if recorder.Code != http.StatusCreated || recorder.Header().Get("Location") == "" {
+		t.Fatalf("start status=%d headers=%v body=%s", recorder.Code, recorder.Header(), recorder.Body.String())
+	}
+
+	request = verifiedRequest(t, http.MethodPost, "/internal/v1/operations/rotations/"+rotationID+"/resume", `{"batch_size":25}`, "spiffe://praetor.local/workload/praetor-secrets-operator")
+	recorder = httptest.NewRecorder()
+	server.ServeHTTP(recorder, request)
+	if recorder.Code != http.StatusOK || service.rotationID != rotationID || service.batchSize != 25 {
+		t.Fatalf("resume status=%d id=%q batch=%d body=%s", recorder.Code, service.rotationID, service.batchSize, recorder.Body.String())
+	}
+
+	request = verifiedRequest(t, http.MethodGet, "/internal/v1/operations/rotations/"+rotationID, "", "spiffe://praetor.local/workload/praetor-secrets-operator")
+	recorder = httptest.NewRecorder()
+	server.ServeHTTP(recorder, request)
+	if recorder.Code != http.StatusOK || service.rotationID != rotationID {
+		t.Fatalf("inspect status=%d id=%q body=%s", recorder.Code, service.rotationID, recorder.Body.String())
+	}
+
+	request = verifiedRequest(t, http.MethodPost, "/internal/v1/operations/rotations/"+rotationID+"/finalize", "", "spiffe://praetor.local/workload/praetor-secrets-operator")
+	recorder = httptest.NewRecorder()
+	server.ServeHTTP(recorder, request)
+	if recorder.Code != http.StatusOK || service.rotationID != rotationID {
+		t.Fatalf("finalize status=%d id=%q body=%s", recorder.Code, service.rotationID, recorder.Body.String())
+	}
+
+	path := "/internal/v1/operations/credentials/98d977e4-3f0a-44cd-81cb-8965d5522996/versions/3/rotate"
+	request = verifiedRequest(t, http.MethodPost, path, `{"organization_id":"org-5"}`, "spiffe://praetor.local/workload/praetor-secrets-operator")
+	recorder = httptest.NewRecorder()
+	server.ServeHTTP(recorder, request)
+	if recorder.Code != http.StatusNoContent || service.credentialRotation.Version != 3 || service.credentialRotation.OrganizationID != "org-5" {
+		t.Fatalf("credential rotation status=%d request=%+v body=%s", recorder.Code, service.credentialRotation, recorder.Body.String())
+	}
+
+	request = verifiedRequest(t, http.MethodPost, "/internal/v1/operations/rotations", "", "spiffe://praetor.local/workload/praetor-api")
+	recorder = httptest.NewRecorder()
+	server.ServeHTTP(recorder, request)
+	if recorder.Code != http.StatusForbidden {
+		t.Fatalf("API started rotation: %d", recorder.Code)
+	}
+}
+
+func TestRotationRoutesRejectMalformedRequests(t *testing.T) {
+	server := newTestServer(t, &fakeService{})
+	identity := "spiffe://praetor.local/workload/praetor-secrets-operator"
+	tests := []struct {
+		method, path, body string
+		status             int
+	}{
+		{http.MethodPost, "/internal/v1/operations/rotations/id/resume", `{"batch_size":0}`, http.StatusBadRequest},
+		{http.MethodPost, "/internal/v1/operations/rotations/id/resume", `{`, http.StatusBadRequest},
+		{http.MethodGet, "/internal/v1/operations/rotations/id/extra", "", http.StatusNotFound},
+		{http.MethodPost, "/internal/v1/operations/credentials/id/versions/not-a-version/rotate", `{"organization_id":"org"}`, http.StatusBadRequest},
+		{http.MethodPost, "/internal/v1/operations/credentials/id/bad/1/rotate", `{"organization_id":"org"}`, http.StatusNotFound},
+		{http.MethodGet, "/internal/v1/operations/unknown", "", http.StatusNotFound},
+	}
+	for _, test := range tests {
+		request := verifiedRequest(t, test.method, test.path, test.body, identity)
+		recorder := httptest.NewRecorder()
+		server.ServeHTTP(recorder, request)
+		if recorder.Code != test.status {
+			t.Fatalf("%s %s status=%d want=%d body=%s", test.method, test.path, recorder.Code, test.status, recorder.Body.String())
+		}
+	}
+}
+
+func TestRotationRequestOperationVocabulary(t *testing.T) {
+	rotationID := "68d977e4-3f0a-44cd-81cb-8965d5522996"
+	tests := []struct {
+		method, path, operation string
+	}{
+		{http.MethodPost, "/internal/v1/operations/rotations", audit.OperationMasterKeyRotationStarted},
+		{http.MethodGet, "/internal/v1/operations/key-status", audit.OperationKeyStatusRead},
+		{http.MethodGet, "/internal/v1/operations/rotations/" + rotationID, audit.OperationMasterKeyRotationInspected},
+		{http.MethodPost, "/internal/v1/operations/rotations/" + rotationID + "/resume", audit.OperationMasterKeyRotationResumed},
+		{http.MethodPost, "/internal/v1/operations/rotations/" + rotationID + "/finalize", audit.OperationMasterKeyRotationFinalized},
+		{http.MethodPost, "/internal/v1/operations/credentials/cred/versions/1/rotate", audit.OperationCredentialKeyRotated},
+	}
+	for _, test := range tests {
+		if got := requestOperation(test.method, test.path); got != test.operation {
+			t.Fatalf("%s %s operation=%q want=%q", test.method, test.path, got, test.operation)
+		}
 	}
 }
 
