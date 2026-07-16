@@ -22,6 +22,8 @@ audit sink are implemented; Praetor integration follows.
 - [Service API and trust-boundary specification](docs/service-api.md)
 - [Envelope record format](docs/envelope-format.md)
 - [Remote audit sink contract](docs/audit-sink-contract.md)
+- [Independent security review packet](docs/security-review-packet.md)
+- [Security policy](SECURITY.md)
 
 ## Master-key files
 
