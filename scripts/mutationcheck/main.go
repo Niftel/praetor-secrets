@@ -75,7 +75,11 @@ func runMutation(root string, mutant mutation) error {
 	}
 	command := exec.Command("go", "test", mutant.testPackage, "-run", mutant.testPattern, "-count=1")
 	command.Dir = temp
-	command.Env = append(os.Environ(), "GOWORK=off", "GOCACHE="+filepath.Join(temp, ".gocache"))
+	cache := os.Getenv("GOCACHE")
+	if cache == "" {
+		cache = filepath.Join(os.TempDir(), "praetor-secrets-mutation-cache")
+	}
+	command.Env = append(os.Environ(), "GOWORK=off", "GOCACHE="+cache)
 	output, testErr := command.CombinedOutput()
 	if strings.Contains(string(output), "[no tests to run]") {
 		return fmt.Errorf("%s selected no tests", mutant.name)
