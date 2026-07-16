@@ -46,4 +46,7 @@ capabilities, and no Kubernetes API token.
 
 For controlled master-key rotation, add `previous-key` to the runtime Secret and
 set `secrets.previousKeyEnabled=true`. Restart the Deployment after any existing
-Secret changes; Helm cannot checksum content it does not own.
+Secret changes; Helm cannot checksum content it does not own. The new key must
+be stored as `master-key` and the former current key as `previous-key`. Keep both
+mounted until the rotation is finalized, live database references are cleared,
+and retained backups no longer depend on the former key.

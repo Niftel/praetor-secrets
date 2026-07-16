@@ -193,6 +193,15 @@ func Encrypt(plaintext []byte, context Context, master MasterKey, source io.Read
 // Decrypt authenticates the record against context supplied by authoritative
 // storage. It deliberately collapses all AEAD failures into ErrAuthentication.
 func Decrypt(record Record, expected Context, keyring map[string]MasterKey) ([]byte, error) {
+	dataKey, err := unwrapDataKey(record, expected, keyring)
+	if err != nil {
+		return nil, err
+	}
+	defer wipe(dataKey)
+	return decryptPayload(record, expected, dataKey)
+}
+
+func unwrapDataKey(record Record, expected Context, keyring map[string]MasterKey) ([]byte, error) {
 	if err := expected.validate(); err != nil {
 		return nil, ErrContextMismatch
 	}
@@ -220,10 +229,13 @@ func Decrypt(record Record, expected Context, keyring map[string]MasterKey) ([]b
 	}
 	dataKey, err := wrapAEAD.Open(nil, record.WrapNonce, record.WrappedDataKey, wrapAAD)
 	if err != nil || len(dataKey) != keySize {
+		wipe(dataKey)
 		return nil, ErrAuthentication
 	}
-	defer wipe(dataKey)
+	return dataKey, nil
+}
 
+func decryptPayload(record Record, expected Context, dataKey []byte) ([]byte, error) {
 	payloadAEAD, err := newGCM(dataKey)
 	if err != nil || len(record.PayloadNonce) != payloadAEAD.NonceSize() {
 		return nil, ErrInvalidRecord
@@ -237,4 +249,62 @@ func Decrypt(record Record, expected Context, keyring map[string]MasterKey) ([]b
 		return nil, ErrAuthentication
 	}
 	return plaintext, nil
+}
+
+// Rewrap authenticates the existing wrapped DEK and payload, then wraps the
+// same DEK with target and a fresh nonce. The credential ciphertext, payload
+// nonce, record ID, and immutable context do not change.
+func Rewrap(record Record, expected Context, keyring map[string]MasterKey, target MasterKey, source io.Reader) (Record, error) {
+	if target.id == "" {
+		return Record{}, ErrUnknownKey
+	}
+	dataKey, err := unwrapDataKey(record, expected, keyring)
+	if err != nil {
+		return Record{}, err
+	}
+	defer wipe(dataKey)
+	plaintext, err := decryptPayload(record, expected, dataKey)
+	if err != nil {
+		return Record{}, err
+	}
+	wipe(plaintext)
+	if source == nil {
+		source = rand.Reader
+	}
+	rewrapped := cloneRecord(record)
+	rewrapped.MasterKeyID = target.id
+	wrapAEAD, err := newGCM(target.key[:])
+	if err != nil {
+		return Record{}, ErrAuthentication
+	}
+	rewrapped.WrapNonce, err = randomBytes(source, wrapAEAD.NonceSize())
+	if err != nil {
+		return Record{}, fmt.Errorf("wrap nonce: %w", err)
+	}
+	wrapAAD, err := aad("data-key-wrap", rewrapped, expected)
+	if err != nil {
+		return Record{}, ErrInvalidRecord
+	}
+	rewrapped.WrappedDataKey = wrapAEAD.Seal(nil, rewrapped.WrapNonce, dataKey, wrapAAD)
+	return rewrapped, nil
+}
+
+// RotateDataKey authenticates and decrypts the record internally, then creates
+// a new independently randomized envelope for the same immutable context.
+func RotateDataKey(record Record, expected Context, keyring map[string]MasterKey, target MasterKey, source io.Reader) (Record, error) {
+	plaintext, err := Decrypt(record, expected, keyring)
+	if err != nil {
+		return Record{}, err
+	}
+	defer wipe(plaintext)
+	return Encrypt(plaintext, expected, target, source)
+}
+
+func cloneRecord(in Record) Record {
+	out := in
+	out.PayloadNonce = append([]byte(nil), in.PayloadNonce...)
+	out.Ciphertext = append([]byte(nil), in.Ciphertext...)
+	out.WrapNonce = append([]byte(nil), in.WrapNonce...)
+	out.WrappedDataKey = append([]byte(nil), in.WrappedDataKey...)
+	return out
 }

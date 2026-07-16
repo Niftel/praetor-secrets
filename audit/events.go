@@ -16,6 +16,7 @@ const (
 
 	OperationUnknownRoute               = "unknown_route"
 	OperationSecurityStatusRead         = "security_status_read"
+	OperationKeyStatusRead              = "key_status_read"
 	OperationCredentialCreated          = "credential_created"
 	OperationCredentialRead             = "credential_read"
 	OperationCredentialInputsReplaced   = "credential_inputs_replaced"
@@ -28,6 +29,7 @@ const (
 	OperationRunBindingExhausted        = "run_binding_exhausted"
 	OperationCredentialResolved         = "credential_resolved"
 	OperationMasterKeyRotationStarted   = "master_key_rotation_started"
+	OperationMasterKeyRotationInspected = "master_key_rotation_inspected"
 	OperationMasterKeyRotationResumed   = "master_key_rotation_resumed"
 	OperationCredentialKeyRotated       = "credential_key_rotated"
 	OperationMasterKeyRotationFinalized = "master_key_rotation_finalized"
@@ -50,6 +52,7 @@ var knownResults = map[string]struct{}{
 var knownOperations = map[string]struct{}{
 	OperationUnknownRoute:               {},
 	OperationSecurityStatusRead:         {},
+	OperationKeyStatusRead:              {},
 	OperationCredentialCreated:          {},
 	OperationCredentialRead:             {},
 	OperationCredentialInputsReplaced:   {},
@@ -62,6 +65,7 @@ var knownOperations = map[string]struct{}{
 	OperationRunBindingExhausted:        {},
 	OperationCredentialResolved:         {},
 	OperationMasterKeyRotationStarted:   {},
+	OperationMasterKeyRotationInspected: {},
 	OperationMasterKeyRotationResumed:   {},
 	OperationCredentialKeyRotated:       {},
 	OperationMasterKeyRotationFinalized: {},

@@ -474,14 +474,39 @@ Initial operations:
 - `POST /internal/v1/operations/rotations` — start a resumable rewrap operation;
 - `GET /internal/v1/operations/rotations/{rotation_id}` — non-secret progress;
 - `POST /internal/v1/operations/rotations/{rotation_id}/resume`;
-- `POST /internal/v1/operations/rotations/{rotation_id}/finalize`; and
+- `POST /internal/v1/operations/rotations/{rotation_id}/finalize`;
+- `POST /internal/v1/operations/credentials/{credential_id}/versions/{version}/rotate`
+  with an `organization_id` body to generate a fresh DEK and envelope for one
+  immutable credential version; and
 - `POST /internal/v1/operations/recovery-validations` — authenticate and decrypt
   representative records while returning counts and hashes of metadata, never
   plaintext.
 
-Rotation and recovery request schemas require a separate design review before
-implementation. No generic debug, SQL, export, decrypt, or reveal endpoint is
-permitted.
+Starting a master-key rotation requires both a current and previous key file.
+The previous key is the source and the current key is the target. Start returns
+the durable rotation identifier and the exact source-key record count. Resume
+accepts only:
+
+```json
+{"batch_size": 100}
+```
+
+Each batch locks and rewraps at most that many records transactionally. A crash
+or failed authentication leaves the batch unchanged; a later resume continues
+from records still referencing the source key. Reads remain available through
+the bounded two-key keyring throughout the migration.
+
+`GET /internal/v1/operations/key-status` returns current and previous key IDs,
+record counts grouped by key ID, the active non-secret rotation progress, and
+`database_references_cleared`. Finalize succeeds only after a database proof
+that no credential version references the source key. This field deliberately
+does not claim that retained backups no longer require the old key. Removing
+the previous-key mount is a separate deployment action and additionally requires
+the backup-retention proof implemented by the backup and disaster-recovery
+subsystem.
+
+Recovery request schemas still require their separate design review. No generic
+debug, SQL, export, decrypt, or reveal endpoint is permitted.
 
 ## 10. Health and security status
 
