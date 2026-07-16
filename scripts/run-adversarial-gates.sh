@@ -9,3 +9,4 @@ GOCACHE="$cache" go test ./envelope -run '^$' -fuzz '^FuzzEnvelopeRejectsMutated
 GOCACHE="$cache" go test ./transport -run 'TestEveryWorkloadRole|TestExecutorCannotSelectCredential|TestSecretSentinel'
 GOCACHE="$cache" go test ./credential -run 'TestPostgresMasterKeyRotation|TestPostgresRecoveryValidation|TestPostgresRunScopedResolution|TestPostgresMutation'
 GOCACHE="$cache" go test ./audit ./auditsink -run 'Tamper|Ordering|Replay|Immutability|RetriesInOrder'
+scripts/test-integrated-acceptance-contract.sh

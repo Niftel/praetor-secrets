@@ -169,6 +169,31 @@ scheduler claim-listener certificate, the executor client CA, and the executor's
 separate Secrets server CA key expected by the Praetor chart. The `clients`
 directory is not applied as a Kubernetes Secret by the helper.
 
+## Integrated acceptance gate
+
+Unit, race, fuzz, and PostgreSQL integration tests are necessary but do not
+prove that the deployed Praetor and Secrets Service stack preserves the same
+security boundaries. Run the board-derived live acceptance gate against an
+isolated local Kubernetes deployment:
+
+```sh
+PRAETOR_ROOT=/path/to/praetor \
+PRAETOR_NAMESPACE=praetor-secrets \
+scripts/run-integrated-acceptance.sh
+```
+
+The gate composes Praetor's real credential-backed execution test with deployed
+checks for service-account isolation, NetworkPolicy presence, read-only key
+mounts, probes and resource bounds, absence of master-key mounts in unrelated
+workloads, plaintext leakage across databases and logs, terminal and unknown-run
+denial, workload-role separation, rejection of executor-controlled credential
+selection, and delivery to the independent audit sink. It writes only
+non-secret evidence (`run_id`, credential metadata ID, and audit-record count).
+
+Rotation and disaster-recovery drills remain separate destructive operational
+procedures; they must run against isolated restored data, never a live
+production database.
+
 ## Backup and disaster recovery
 
 [`scripts/backup-encrypted-database.sh`](scripts/backup-encrypted-database.sh)
