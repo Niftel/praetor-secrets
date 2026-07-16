@@ -8,6 +8,9 @@ praetor-secrets:
   auditSink:
     serviceName: praetor-audit-sink
     servicePort: 8444
+  networkPolicy:
+    enabled: true
+    sameReleaseOnly: false
 
 praetor-audit-sink:
   fullnameOverride: praetor-audit-sink

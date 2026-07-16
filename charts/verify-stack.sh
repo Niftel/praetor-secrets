@@ -17,6 +17,12 @@ helm template integration charts/praetor-secrets-stack \
 
 grep -q 'value: "https://praetor-audit-sink.security.svc:8444/internal/v1/audit/events"' "$output"
 grep -q 'name: praetor-audit-sink-ingress' "$output"
+grep -q 'name: praetor-secrets-ingress' "$output"
+grep -q 'app.kubernetes.io/component: api' "$output"
+grep -q 'app.kubernetes.io/component: scheduler' "$output"
+grep -q 'app.kubernetes.io/component: executor' "$output"
+grep -q 'cpu: 50m' "$output"
+grep -q 'memory: 256Mi' "$output"
 grep -q 'app.kubernetes.io/name: praetor-secrets' "$output"
 grep -q 'app.kubernetes.io/instance: integration' "$output"
 grep -q 'command: \["/usr/local/bin/praetor-audit-sink"\]' "$output"

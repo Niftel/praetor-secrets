@@ -34,13 +34,28 @@ auditSink:
   pollInterval: 1s
   requestTimeout: 5s
 
+networkPolicy:
+  enabled: true
+  sameReleaseOnly: false
+  clientPodSelectors:
+    - app.kubernetes.io/component: api
+    - app.kubernetes.io/component: scheduler
+    - app.kubernetes.io/component: executor
+  additionalIngress: []
+
 limits:
   databaseConnections: 10
   networkConnections: 100
   pendingAuditEvents: 100000
   shutdownTimeout: 20s
 
-resources: {}
+resources:
+  requests:
+    cpu: 50m
+    memory: 64Mi
+  limits:
+    cpu: 500m
+    memory: 256Mi
 podAnnotations: {}
 podSecurityContext:
   seccompProfile:
