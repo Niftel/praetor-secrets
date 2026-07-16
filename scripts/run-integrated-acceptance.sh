@@ -16,14 +16,14 @@ SCHEDULER_IDENTITY_SECRET="${PRAETOR_SCHEDULER_IDENTITY_SECRET:-praetor-schedule
 TIMEOUT_SECONDS="${PRAETOR_ACCEPTANCE_TIMEOUT_SECONDS:-180}"
 
 need() { command -v "$1" >/dev/null 2>&1 || { echo "error: required command '$1' is not installed" >&2; exit 1; }; }
-for command in base64 curl jq kubectl openssl uuidgen; do need "$command"; done
+for command in base64 curl go jq kubectl nc openssl uuidgen; do need "$command"; done
 [[ -x "$PRAETOR_ROOT/scripts/test-secrets-execution-e2e.sh" ]] || {
   echo "error: set PRAETOR_ROOT to the integrated Praetor checkout" >&2
   exit 1
 }
 
 TMP="$(mktemp -d "${TMPDIR:-/tmp}/praetor-secrets-acceptance.XXXXXX")"
-trap 'kill "${PORT_FORWARD_PID:-}" 2>/dev/null || true; rm -rf "$TMP"' EXIT
+trap 'kill "${PORT_FORWARD_PID:-}" "${DB_FORWARD_PID:-}" 2>/dev/null || true; rm -rf "$TMP"' EXIT
 SENTINEL="acceptance-$(openssl rand -hex 24)"
 EVIDENCE="$TMP/execution.json"
 
@@ -160,6 +160,25 @@ if kubectl exec -n "$NAMESPACE" "$AUDIT_DB_POD" -- sh -c \
   echo "error: remote audit sink contains credential plaintext" >&2
   exit 1
 fi
+
+echo "==> Proving lifecycle snapshots, restart-safe rotation, and isolated recovery"
+DB_TEST_PORT="${PRAETOR_SECRETS_DATABASE_TEST_PORT:-25433}"
+DB_USER="$(kubectl exec -n "$NAMESPACE" "$SECRETS_DB_POD" -- sh -c 'printf %s "$POSTGRES_USER"')"
+DB_PASSWORD="$(kubectl exec -n "$NAMESPACE" "$SECRETS_DB_POD" -- sh -c 'printf %s "$POSTGRES_PASSWORD"')"
+DB_NAME="$(kubectl exec -n "$NAMESPACE" "$SECRETS_DB_POD" -- sh -c 'printf %s "$POSTGRES_DB"')"
+kubectl port-forward -n "$NAMESPACE" "$SECRETS_DB_POD" "$DB_TEST_PORT:5432" >"$TMP/database-port-forward.log" 2>&1 &
+DB_FORWARD_PID=$!
+for _ in $(seq 1 30); do
+  nc -z 127.0.0.1 "$DB_TEST_PORT" >/dev/null 2>&1 && break
+  kill -0 "$DB_FORWARD_PID" 2>/dev/null || {
+    echo "error: database port-forward stopped unexpectedly" >&2
+    exit 1
+  }
+  sleep 1
+done
+PRAETOR_SECRETS_TEST_DATABASE_URL="postgres://$DB_USER:$DB_PASSWORD@127.0.0.1:$DB_TEST_PORT/$DB_NAME?sslmode=disable" \
+  GOWORK=off GOCACHE="${GOCACHE:-/tmp/praetor-secrets-acceptance-go-cache}" \
+  go test "$ROOT/app" -run '^TestOperationsSurviveRestartAndValidateIsolatedRestore$' -count=1
 
 jq -n --arg run_id "$RUN_ID" --arg credential_id "$CREDENTIAL_ID" \
   --argjson audit_records "$AUDIT_COUNT" \

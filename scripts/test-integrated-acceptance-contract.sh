@@ -12,9 +12,12 @@ for required in \
   "unknown run did not fail closed" \
   "API workload identity reached executor resolution" \
   "executor-controlled credential selector was accepted" \
-  "remote audit sink has no evidence"; do
+  "remote audit sink has no evidence" \
+  "TestOperationsSurviveRestartAndValidateIsolatedRestore"; do
   grep -Fq "$required" "$script" || {
     echo "acceptance harness lost required check: $required" >&2
     exit 1
   }
 done
+grep -Fq "credential replacement" "$(dirname "$0")/../app/operations_e2e_test.go"
+grep -Fq "wrong-key recovery response leaked plaintext" "$(dirname "$0")/../app/operations_e2e_test.go"

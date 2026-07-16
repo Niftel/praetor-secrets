@@ -82,10 +82,11 @@ func TestOperationsSurviveRestartAndValidateIsolatedRestore(t *testing.T) {
 
 	fixture := newOperationsTLSFixture(t, directory)
 	sourceConfig := operationsConfig(t, directory+"/source", sourceURL, newKey, oldKey, fixture)
-	client := fixture.client()
+	client := fixture.client("operator")
 
 	runtime, cancel, done := startOperationsRuntime(t, sourceConfig)
 	baseURL := "https://" + runtimeAddress(t, runtime)
+	proveSnapshottedCredentialLifecycle(t, fixture, baseURL)
 	rotation := operationsJSON(t, client, http.MethodPost, baseURL+"/internal/v1/operations/rotations", "", http.StatusCreated)
 	rotationID := stringField(t, rotation, "id")
 	firstBatch := operationsJSON(t, client, http.MethodPost, baseURL+"/internal/v1/operations/rotations/"+rotationID+"/resume", `{"batch_size":1}`, http.StatusOK)
@@ -192,9 +193,96 @@ func seedEncryptedCredentials(t *testing.T, pool *pgxpool.Pool, keyPath string) 
 	}
 }
 
+func proveSnapshottedCredentialLifecycle(t *testing.T, fixture operationsTLSFixture, baseURL string) {
+	t.Helper()
+	api := fixture.client("api")
+	scheduler := fixture.client("scheduler")
+	executor := fixture.client("executor")
+	actor := `{"user_id":"104","username":"acceptance","authorization_decision_id":"operations-e2e"}`
+	created := operationsJSONWithHeaders(t, api, http.MethodPost, baseURL+"/internal/v1/credentials",
+		`{"organization_id":"5","name":"lifecycle","credential_type":"machine","schema_version":1,"inputs":{"username":"automation","password":"snapshot-old-secret"},"actor":`+actor+`}`,
+		map[string]string{"Idempotency-Key": "operations-lifecycle-create"}, http.StatusCreated)
+	credentialID := stringField(t, created, "id")
+	persisted := operationsJSONWithHeaders(t, api, http.MethodGet, baseURL+"/internal/v1/credentials/"+credentialID,
+		"", map[string]string{"X-Praetor-Organization-ID": "5"}, http.StatusOK)
+	if stringField(t, persisted, "id") != credentialID {
+		t.Fatalf("created credential was not durably readable: %v", persisted)
+	}
+
+	now := time.Now().UTC()
+	oldRun, oldDispatch := testUUID(t), testUUID(t)
+	registerBinding := func(runID, dispatchID, idempotencyKey string, status int) map[string]any {
+		body, err := json.Marshal(map[string]any{
+			"run_id": runID, "dispatch_id": dispatchID, "organization_id": "5",
+			"credential_id": credentialID, "executor_identity": "praetor-executor:operations-1",
+			"not_before": now.Add(-30 * time.Second), "expires_at": now.Add(10 * time.Minute), "max_resolutions": 2,
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		return operationsJSONWithHeaders(t, scheduler, http.MethodPost, baseURL+"/internal/v1/run-bindings",
+			string(body), map[string]string{"Idempotency-Key": idempotencyKey}, status)
+	}
+	oldBinding := registerBinding(oldRun, oldDispatch, "operations-old-binding", http.StatusCreated)
+	if numberField(t, oldBinding, "credential_version") != 1 {
+		t.Fatalf("old binding did not snapshot version 1: %v", oldBinding)
+	}
+
+	replaced := operationsJSONWithHeaders(t, api, http.MethodPut, baseURL+"/internal/v1/credentials/"+credentialID+"/inputs",
+		`{"expected_version":1,"inputs":{"username":"automation","password":"snapshot-new-secret"},"actor":`+actor+`}`,
+		map[string]string{"X-Praetor-Organization-ID": "5"}, http.StatusOK)
+	if numberField(t, replaced, "version") != 2 {
+		t.Fatalf("credential replacement=%v", replaced)
+	}
+	oldResolution := resolveLifecycleRun(t, executor, baseURL, oldRun)
+	if !strings.Contains(oldResolution, "snapshot-old-secret") || strings.Contains(oldResolution, "snapshot-new-secret") {
+		t.Fatal("in-flight binding did not preserve its snapshotted credential version")
+	}
+
+	newRun, newDispatch := testUUID(t), testUUID(t)
+	newBinding := registerBinding(newRun, newDispatch, "operations-new-binding", http.StatusCreated)
+	if numberField(t, newBinding, "credential_version") != 2 {
+		t.Fatalf("new binding did not snapshot version 2: %v", newBinding)
+	}
+	newResolution := resolveLifecycleRun(t, executor, baseURL, newRun)
+	if !strings.Contains(newResolution, "snapshot-new-secret") || strings.Contains(newResolution, "snapshot-old-secret") {
+		t.Fatal("new binding did not use the replacement credential version")
+	}
+
+	retired := operationsJSONWithHeaders(t, api, http.MethodPost, baseURL+"/internal/v1/credentials/"+credentialID+"/retire",
+		`{"expected_version":2,"actor":`+actor+`}`,
+		map[string]string{"X-Praetor-Organization-ID": "5"}, http.StatusOK)
+	if stringField(t, retired, "state") != "retired" || numberField(t, retired, "version") != 3 {
+		t.Fatalf("credential retirement=%v", retired)
+	}
+	rejectedRun, rejectedDispatch := testUUID(t), testUUID(t)
+	registerBinding(rejectedRun, rejectedDispatch, "operations-retired-binding", http.StatusNotFound)
+}
+
+func resolveLifecycleRun(t *testing.T, client *http.Client, baseURL, runID string) string {
+	t.Helper()
+	body, err := json.Marshal(map[string]any{"attempt_id": testUUID(t), "requested_at": time.Now().UTC()})
+	if err != nil {
+		t.Fatal(err)
+	}
+	return operationsRaw(t, client, http.MethodPost, baseURL+"/internal/v1/runs/"+runID+"/credential:resolve", string(body), http.StatusOK)
+}
+
+func testUUID(t *testing.T) string {
+	t.Helper()
+	var value [16]byte
+	if _, err := rand.Read(value[:]); err != nil {
+		t.Fatal(err)
+	}
+	value[6] = value[6]&0x0f | 0x40
+	value[8] = value[8]&0x3f | 0x80
+	return fmt.Sprintf("%08x-%04x-%04x-%04x-%012x",
+		value[0:4], value[4:6], value[6:8], value[8:10], value[10:16])
+}
+
 type operationsTLSFixture struct {
 	caFile, serverCertFile, serverKeyFile string
-	operator                              tls.Certificate
+	clients                               map[string]tls.Certificate
 	roots                                 *x509.CertPool
 }
 
@@ -218,7 +306,7 @@ func newOperationsTLSFixture(t *testing.T, directory string) operationsTLSFixtur
 	if err != nil {
 		t.Fatal(err)
 	}
-	issue := func(serial int64, operator bool) ([]byte, []byte) {
+	issue := func(serial int64, identity string) ([]byte, []byte) {
 		key, keyErr := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
 		if keyErr != nil {
 			t.Fatal(keyErr)
@@ -227,9 +315,9 @@ func newOperationsTLSFixture(t *testing.T, directory string) operationsTLSFixtur
 			SerialNumber: big.NewInt(serial), NotBefore: now.Add(-time.Minute), NotAfter: now.Add(time.Hour),
 			KeyUsage: x509.KeyUsageDigitalSignature,
 		}
-		if operator {
-			operatorURL, _ := url.Parse("spiffe://praetor.local/workload/praetor-secrets-operator")
-			template.URIs = []*url.URL{operatorURL}
+		if identity != "" {
+			identityURL, _ := url.Parse(identity)
+			template.URIs = []*url.URL{identityURL}
 			template.ExtKeyUsage = []x509.ExtKeyUsage{x509.ExtKeyUsageClientAuth}
 		} else {
 			template.DNSNames = []string{"localhost"}
@@ -247,11 +335,23 @@ func newOperationsTLSFixture(t *testing.T, directory string) operationsTLSFixtur
 		return pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: der}),
 			pem.EncodeToMemory(&pem.Block{Type: "PRIVATE KEY", Bytes: keyDER})
 	}
-	serverCert, serverKey := issue(101, false)
-	operatorCert, operatorKey := issue(102, true)
-	operator, err := tls.X509KeyPair(operatorCert, operatorKey)
-	if err != nil {
-		t.Fatal(err)
+	serverCert, serverKey := issue(101, "")
+	identities := map[string]string{
+		"operator":  "spiffe://praetor.local/workload/praetor-secrets-operator",
+		"api":       "spiffe://praetor.local/workload/praetor-api",
+		"scheduler": "spiffe://praetor.local/workload/praetor-scheduler",
+		"executor":  "spiffe://praetor.local/workload/praetor-executor/operations-1",
+	}
+	clients := make(map[string]tls.Certificate, len(identities))
+	serial := int64(102)
+	for name, identity := range identities {
+		certificate, key := issue(serial, identity)
+		parsed, parseErr := tls.X509KeyPair(certificate, key)
+		if parseErr != nil {
+			t.Fatal(parseErr)
+		}
+		clients[name] = parsed
+		serial++
 	}
 	caPEM := pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: caDER})
 	roots := x509.NewCertPool()
@@ -260,14 +360,14 @@ func newOperationsTLSFixture(t *testing.T, directory string) operationsTLSFixtur
 		caFile:         writeFile(t, directory+"/operations-ca.crt", caPEM, 0o444),
 		serverCertFile: writeFile(t, directory+"/operations-server.crt", serverCert, 0o444),
 		serverKeyFile:  writeFile(t, directory+"/operations-server.key", serverKey, 0o400),
-		operator:       operator, roots: roots,
+		clients:        clients, roots: roots,
 	}
 }
 
-func (fixture operationsTLSFixture) client() *http.Client {
+func (fixture operationsTLSFixture) client(identity string) *http.Client {
 	return &http.Client{Transport: &http.Transport{TLSClientConfig: &tls.Config{
 		MinVersion: tls.VersionTLS13, RootCAs: fixture.roots,
-		Certificates: []tls.Certificate{fixture.operator}, ServerName: "localhost",
+		Certificates: []tls.Certificate{fixture.clients[identity]}, ServerName: "localhost",
 	}}}
 }
 
@@ -344,7 +444,12 @@ func stopOperationsRuntime(t *testing.T, cancel context.CancelFunc, done <-chan 
 
 func operationsJSON(t *testing.T, client *http.Client, method, endpoint, body string, status int) map[string]any {
 	t.Helper()
-	raw := operationsRaw(t, client, method, endpoint, body, status)
+	return operationsJSONWithHeaders(t, client, method, endpoint, body, nil, status)
+}
+
+func operationsJSONWithHeaders(t *testing.T, client *http.Client, method, endpoint, body string, headers map[string]string, status int) map[string]any {
+	t.Helper()
+	raw := operationsRawWithHeaders(t, client, method, endpoint, body, headers, status)
 	var result map[string]any
 	if err := json.Unmarshal([]byte(raw), &result); err != nil {
 		t.Fatalf("decode operations response %q: %v", raw, err)
@@ -354,12 +459,20 @@ func operationsJSON(t *testing.T, client *http.Client, method, endpoint, body st
 
 func operationsRaw(t *testing.T, client *http.Client, method, endpoint, body string, status int) string {
 	t.Helper()
+	return operationsRawWithHeaders(t, client, method, endpoint, body, nil, status)
+}
+
+func operationsRawWithHeaders(t *testing.T, client *http.Client, method, endpoint, body string, headers map[string]string, status int) string {
+	t.Helper()
 	request, err := http.NewRequest(method, endpoint, strings.NewReader(body))
 	if err != nil {
 		t.Fatal(err)
 	}
 	if body != "" {
 		request.Header.Set("Content-Type", "application/json")
+	}
+	for name, value := range headers {
+		request.Header.Set(name, value)
 	}
 	response, err := client.Do(request)
 	if err != nil {
