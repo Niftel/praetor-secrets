@@ -31,6 +31,10 @@ func (server *Server) operationRoute(writer http.ResponseWriter, request *http.R
 			writeDecodeProblem(writer, err)
 			return
 		}
+		if body.SampleSize < 1 || body.SampleSize > 1000 {
+			writeProblem(writer, http.StatusBadRequest, "invalid_request")
+			return
+		}
 		result, err := server.service.ValidateRecovery(request.Context(), body.SampleSize)
 		if err != nil {
 			writeServiceProblem(writer, err)

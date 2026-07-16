@@ -358,12 +358,23 @@ func TestPostgresRecoveryValidationAndBackupEvidence(t *testing.T) {
 	if _, err := manager.RegisterBackup(backupCtx, backup); err != nil {
 		t.Fatal(err)
 	}
+	if replay, err := manager.RegisterBackup(backupCtx, backup); err != nil || replay.ID != backup.ID {
+		t.Fatalf("backup replay=%+v err=%v", replay, err)
+	}
+	conflict := backup
+	conflict.ArtifactSHA256 = strings.Repeat("d", 64)
+	if _, err := manager.RegisterBackup(backupCtx, conflict); !errors.Is(err, ErrBackupConflict) {
+		t.Fatalf("backup conflict=%v", err)
+	}
 	status, err := manager.KeyStatus(ctx)
 	if err != nil || status.RetainedBackupReferences[record.MasterKeyID] != 1 {
 		t.Fatalf("status=%+v err=%v", status, err)
 	}
 	if _, err := manager.ExpireBackup(backupCtx, backup.ID); err != nil {
 		t.Fatal(err)
+	}
+	if _, err := manager.ExpireBackup(backupCtx, "missing"); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("missing backup=%v", err)
 	}
 	status, _ = manager.KeyStatus(ctx)
 	if status.RetainedBackupReferences[record.MasterKeyID] != 0 {

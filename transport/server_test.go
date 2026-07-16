@@ -489,6 +489,7 @@ func TestRecoveryAndBackupRouteFailures(t *testing.T) {
 		status     int
 	}{
 		{"/internal/v1/operations/recovery-validations", "{", nil, 400},
+		{"/internal/v1/operations/recovery-validations", `{"sample_size":0}`, nil, 400},
 		{"/internal/v1/operations/recovery-validations", `{"sample_size":1}`, credential.ErrRecoveryValidation, 409},
 		{"/internal/v1/operations/backups", "{", nil, 400},
 		{"/internal/v1/operations/backups", `{"id":"x"}`, credential.ErrBackupConflict, 409},
