@@ -47,6 +47,8 @@ type KeyStatus struct {
 	RecordCounts              map[string]int64 `json:"record_counts"`
 	ActiveRotation            *Rotation        `json:"active_rotation,omitempty"`
 	DatabaseReferencesCleared bool             `json:"database_references_cleared"`
+	RetainedBackupReferences  map[string]int64 `json:"retained_backup_references"`
+	BackupReferencesCleared   bool             `json:"backup_references_cleared"`
 }
 
 type rotationRecord struct {

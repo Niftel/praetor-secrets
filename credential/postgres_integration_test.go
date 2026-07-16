@@ -332,6 +332,56 @@ func TestPostgresPerCredentialRotationAndKeyStatus(t *testing.T) {
 	}
 }
 
+func TestPostgresRecoveryValidationAndBackupEvidence(t *testing.T) {
+	pool := postgresTestPool(t)
+	ctx := context.Background()
+	if err := ApplyPostgresMigrations(ctx, pool); err != nil {
+		t.Fatal(err)
+	}
+	manager := postgresTestManager(t, pool)
+	createCtx := audit.WithRequest(ctx, audit.Request{ID: "create", WorkloadIdentity: "praetor-api", Operation: audit.OperationCredentialCreated, StartedAt: time.Now().UTC()})
+	metadata, err := manager.CreateContext(createCtx, validCreate())
+	if err != nil {
+		t.Fatal(err)
+	}
+	recoveryCtx := audit.WithRequest(ctx, audit.Request{ID: "recovery", WorkloadIdentity: "praetor-secrets-operator", Operation: audit.OperationRecoveryValidationFinished, StartedAt: time.Now().UTC()})
+	result, err := manager.ValidateRecovery(recoveryCtx, 10)
+	if err != nil || result.ValidatedRecords != 1 || result.TotalRecords != 1 {
+		t.Fatalf("result=%+v err=%v", result, err)
+	}
+	_, record, err := manager.backend.Get(ctx, metadata.OrganizationID, metadata.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	backup := BackupSet{ID: "backup-pg", ArtifactSHA256: strings.Repeat("c", 64), KeyIDs: []string{record.MasterKeyID}, CreatedAt: manager.now(), RetainUntil: manager.now().Add(time.Hour)}
+	backupCtx := audit.WithRequest(ctx, audit.Request{ID: "backup", WorkloadIdentity: "praetor-secrets-operator", Operation: audit.OperationBackupRegistered, StartedAt: time.Now().UTC()})
+	if _, err := manager.RegisterBackup(backupCtx, backup); err != nil {
+		t.Fatal(err)
+	}
+	if replay, err := manager.RegisterBackup(backupCtx, backup); err != nil || replay.ID != backup.ID {
+		t.Fatalf("backup replay=%+v err=%v", replay, err)
+	}
+	conflict := backup
+	conflict.ArtifactSHA256 = strings.Repeat("d", 64)
+	if _, err := manager.RegisterBackup(backupCtx, conflict); !errors.Is(err, ErrBackupConflict) {
+		t.Fatalf("backup conflict=%v", err)
+	}
+	status, err := manager.KeyStatus(ctx)
+	if err != nil || status.RetainedBackupReferences[record.MasterKeyID] != 1 {
+		t.Fatalf("status=%+v err=%v", status, err)
+	}
+	if _, err := manager.ExpireBackup(backupCtx, backup.ID); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := manager.ExpireBackup(backupCtx, "missing"); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("missing backup=%v", err)
+	}
+	status, _ = manager.KeyStatus(ctx)
+	if status.RetainedBackupReferences[record.MasterKeyID] != 0 {
+		t.Fatalf("status=%+v", status)
+	}
+}
+
 func TestPostgresMutationFailsClosedWithoutAuditSpool(t *testing.T) {
 	pool := postgresTestPool(t)
 	ctx := context.Background()

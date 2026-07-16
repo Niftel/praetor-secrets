@@ -24,6 +24,9 @@ var runBindingMigration string
 //go:embed migrations/003_rotations.sql
 var rotationMigration string
 
+//go:embed migrations/004_recovery.sql
+var recoveryMigration string
+
 var ErrStorage = errors.New("credential storage unavailable")
 
 type postgresBackend struct {
@@ -117,7 +120,7 @@ func ApplyPostgresMigrations(ctx context.Context, pool *pgxpool.Pool) error {
     )`); err != nil {
 		return ErrStorage
 	}
-	for index, migration := range []string{credentialMigration, runBindingMigration, rotationMigration} {
+	for index, migration := range []string{credentialMigration, runBindingMigration, rotationMigration, recoveryMigration} {
 		version := index + 1
 		var applied bool
 		if err := tx.QueryRow(ctx, "SELECT EXISTS (SELECT 1 FROM praetor_secrets_schema_migrations WHERE version = $1)", version).Scan(&applied); err != nil {

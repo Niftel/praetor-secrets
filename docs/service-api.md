@@ -505,8 +505,21 @@ the previous-key mount is a separate deployment action and additionally requires
 the backup-retention proof implemented by the backup and disaster-recovery
 subsystem.
 
-Recovery request schemas still require their separate design review. No generic
-debug, SQL, export, decrypt, or reveal endpoint is permitted.
+Recovery validation accepts only `{"sample_size": N}` where `N` is between 1
+and 1000. It authenticates deterministic representative records from the
+restored database and returns record counts, key-ID counts, and a SHA-256 digest
+of non-secret metadata. Wrong or missing keys return
+`recovery_validation_failed`; plaintext, ciphertext, SQL, and key paths are
+never returned.
+
+Backup evidence is registered with `POST /internal/v1/operations/backups` using
+an operator-selected backup ID, the encrypted dump SHA-256, the key IDs required
+by that dump, creation time, and retention deadline. Expiration uses
+`POST /internal/v1/operations/backups/{backup_id}/expire`. Key status reports
+retained backup references separately from live database references. An old key
+may be retired only when both reference sets are clear.
+
+No generic debug, SQL, export, decrypt, or reveal endpoint is permitted.
 
 ## 10. Health and security status
 

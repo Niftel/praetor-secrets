@@ -35,6 +35,8 @@ const (
 	OperationMasterKeyRotationFinalized = "master_key_rotation_finalized"
 	OperationRecoveryValidationStarted  = "recovery_validation_started"
 	OperationRecoveryValidationFinished = "recovery_validation_finished"
+	OperationBackupRegistered           = "backup_registered"
+	OperationBackupExpired              = "backup_expired"
 )
 
 var knownEventTypes = map[string]struct{}{
@@ -71,6 +73,8 @@ var knownOperations = map[string]struct{}{
 	OperationMasterKeyRotationFinalized: {},
 	OperationRecoveryValidationStarted:  {},
 	OperationRecoveryValidationFinished: {},
+	OperationBackupRegistered:           {},
+	OperationBackupExpired:              {},
 }
 
 func KnownOperation(operation string) bool {

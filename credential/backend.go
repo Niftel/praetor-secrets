@@ -22,6 +22,9 @@ type backend interface {
 	FinalizeRotation(context.Context, string, time.Time) (Rotation, error)
 	RotateCredential(context.Context, CredentialRotationRequest, func(rotationRecord) (envelope.Record, error), time.Time) error
 	KeyStatus(context.Context, string, string) (KeyStatus, error)
+	ValidateRecovery(context.Context, int, func(rotationRecord) error) (RecoveryValidation, error)
+	RegisterBackup(context.Context, BackupSet, time.Time) (BackupSet, error)
+	ExpireBackup(context.Context, string, time.Time) (BackupSet, error)
 }
 
 type memoryCredential struct {
@@ -36,6 +39,7 @@ type memoryBackend struct {
 	bindings    map[string]*memoryBinding
 	attempts    map[string]memoryAttempt
 	rotations   map[string]*Rotation
+	backups     map[string]*BackupSet
 }
 
 func newMemoryBackend() *memoryBackend {
@@ -45,6 +49,7 @@ func newMemoryBackend() *memoryBackend {
 		bindings:    make(map[string]*memoryBinding),
 		attempts:    make(map[string]memoryAttempt),
 		rotations:   make(map[string]*Rotation),
+		backups:     make(map[string]*BackupSet),
 	}
 }
 
@@ -128,6 +133,7 @@ func (b *memoryBackend) KeyStatus(_ context.Context, current, previous string) (
 	b.mu.RLock()
 	defer b.mu.RUnlock()
 	status := KeyStatus{CurrentKeyID: current, PreviousKeyID: previous, RecordCounts: map[string]int64{}}
+	status.RetainedBackupReferences = map[string]int64{}
 	for _, credential := range b.credentials {
 		for _, record := range credential.records {
 			status.RecordCounts[record.MasterKeyID]++
@@ -142,6 +148,14 @@ func (b *memoryBackend) KeyStatus(_ context.Context, current, previous string) (
 	}
 	status.DatabaseReferencesCleared = previous != "" && status.RecordCounts[previous] == 0 &&
 		(status.ActiveRotation == nil || status.ActiveRotation.State == RotationFinalized)
+	for _, backup := range b.backups {
+		if backup.ExpiredAt.IsZero() {
+			for _, id := range backup.KeyIDs {
+				status.RetainedBackupReferences[id]++
+			}
+		}
+	}
+	status.BackupReferencesCleared = previous != "" && status.RetainedBackupReferences[previous] == 0
 	return status, nil
 }
 
