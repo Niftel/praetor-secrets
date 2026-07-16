@@ -33,7 +33,7 @@ func Completion(ctx context.Context, result, reason string, finished time.Time) 
 	} else if duration >= 10*time.Millisecond {
 		latency = "medium"
 	}
-	return Event{SchemaVersion: SchemaVersion, Timestamp: finished.UTC(), EventType: "request_completed", Operation: request.Operation, Result: result, ReasonCode: reason, WorkloadIdentity: request.WorkloadIdentity, HumanActor: request.HumanActor, RequestID: request.ID, LatencyClass: latency}
+	return Event{SchemaVersion: SchemaVersion, Timestamp: finished.UTC(), EventType: EventTypeRequestCompleted, Operation: request.Operation, Result: result, ReasonCode: reason, WorkloadIdentity: request.WorkloadIdentity, HumanActor: request.HumanActor, RequestID: request.ID, LatencyClass: latency}
 }
 
 type Recorder struct {
@@ -94,12 +94,12 @@ func (recorder *Recorder) Status(ctx context.Context) (SecurityStatus, error) {
 func StableResult(status int) (string, string) {
 	switch {
 	case status >= 200 && status < 300:
-		return "success", "completed"
+		return ResultSuccess, ReasonCompleted
 	case status == 401 || status == 403:
-		return "denied", "operation_not_permitted"
+		return ResultDenied, ReasonOperationNotPermitted
 	case status >= 400 && status < 500:
-		return "rejected", "invalid_request"
+		return ResultRejected, ReasonInvalidRequest
 	default:
-		return "error", "secure_operation_failed"
+		return ResultError, ReasonSecureOperationFailed
 	}
 }

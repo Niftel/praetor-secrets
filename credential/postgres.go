@@ -55,7 +55,7 @@ func (b *postgresBackend) appendCompletion(ctx context.Context, tx pgx.Tx, event
 	if !ok {
 		return nil
 	}
-	completion := audit.Completion(ctx, "success", "completed", event.Timestamp)
+	completion := audit.Completion(ctx, audit.ResultSuccess, audit.ReasonCompleted, event.Timestamp)
 	completion.OrganizationID = event.OrganizationID
 	completion.CredentialID = event.CredentialID
 	completion.RunID = event.RunID
@@ -195,7 +195,7 @@ func (b *postgresBackend) Create(ctx context.Context, idempotencyID string, dige
 		organizationID, idempotencyKey, digest[:], metadataJSON, metadata.ID, metadata.CreatedAt); err != nil {
 		return Metadata{}, ErrStorage
 	}
-	if err := b.appendSuccessfulTransition(ctx, tx, credentialAudit("credential_created", metadata)); err != nil {
+	if err := b.appendSuccessfulTransition(ctx, tx, credentialAudit(audit.OperationCredentialCreated, metadata)); err != nil {
 		return Metadata{}, err
 	}
 	if err := tx.Commit(ctx); err != nil {
@@ -274,7 +274,7 @@ func (b *postgresBackend) Update(ctx context.Context, organizationID, credential
 }
 
 func credentialAudit(operation string, metadata Metadata) audit.Event {
-	return audit.Event{SchemaVersion: audit.SchemaVersion, Timestamp: metadata.UpdatedAt.UTC(), EventType: "state_transition", Operation: operation, Result: "success", ReasonCode: "completed", OrganizationID: metadata.OrganizationID, CredentialID: metadata.ID, CredentialVersion: metadata.Version, CredentialSchema: metadata.SchemaVersion}
+	return audit.Event{SchemaVersion: audit.SchemaVersion, Timestamp: metadata.UpdatedAt.UTC(), EventType: audit.EventTypeStateTransition, Operation: operation, Result: audit.ResultSuccess, ReasonCode: audit.ReasonCompleted, OrganizationID: metadata.OrganizationID, CredentialID: metadata.ID, CredentialVersion: metadata.Version, CredentialSchema: metadata.SchemaVersion}
 }
 
 func encodeStorage(metadata Metadata, record envelope.Record) ([]byte, []byte, error) {

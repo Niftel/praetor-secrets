@@ -202,6 +202,36 @@ func TestStrictRequestAndSecretSafeErrors(t *testing.T) {
 	}
 }
 
+func TestSecretSentinelNeverCrossesHTTPOrAuditBoundary(t *testing.T) {
+	const sentinel = "SECRET-SENTINEL-DO-NOT-EMIT"
+	auditor := &fakeAuditor{}
+	server, err := NewServer(
+		&fakeService{err: errors.New(sentinel)},
+		SPIFFEMapper{TrustDomain: "praetor.local"},
+		auditor,
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	path := "/internal/v1/runs/32b9fc25-fd71-47e6-b0e8-45db87df9f65/credential:resolve"
+	body := `{"attempt_id":"31024db7-0db8-446a-b049-dd9d172cde94","requested_at":"2026-07-15T12:00:00Z"}`
+	request := verifiedRequest(t, http.MethodPost, path, body, "spiffe://praetor.local/workload/praetor-executor/worker-7")
+	recorder := httptest.NewRecorder()
+
+	server.ServeHTTP(recorder, request)
+
+	events, marshalErr := json.Marshal(auditor.events)
+	if marshalErr != nil {
+		t.Fatal(marshalErr)
+	}
+	if strings.Contains(recorder.Body.String(), sentinel) || strings.Contains(string(events), sentinel) {
+		t.Fatalf("secret crossed boundary: response=%s audit=%s", recorder.Body.String(), events)
+	}
+	if recorder.Code != http.StatusInternalServerError || len(auditor.events) != 1 {
+		t.Fatalf("status=%d events=%s", recorder.Code, events)
+	}
+}
+
 func TestServiceErrorMapping(t *testing.T) {
 	tests := []struct {
 		err    error

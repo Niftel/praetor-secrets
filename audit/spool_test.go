@@ -9,7 +9,7 @@ import (
 )
 
 func validEvent() Event {
-	return Event{SchemaVersion: SchemaVersion, Timestamp: time.Date(2026, 7, 15, 12, 0, 0, 0, time.UTC), EventType: "state_transition", Operation: "credential_created", Result: "success", ReasonCode: "completed", OrganizationID: "org-5", CredentialID: "credential-1"}
+	return Event{SchemaVersion: SchemaVersion, Timestamp: time.Date(2026, 7, 15, 12, 0, 0, 0, time.UTC), EventType: EventTypeStateTransition, Operation: OperationCredentialCreated, Result: ResultSuccess, ReasonCode: ReasonCompleted, OrganizationID: "org-5", CredentialID: "credential-1"}
 }
 
 func TestNewAndEventValidation(t *testing.T) {
@@ -27,10 +27,31 @@ func TestNewAndEventValidation(t *testing.T) {
 	if !errors.Is(validate(event), ErrEvent) {
 		t.Fatal("unsafe token accepted")
 	}
+	event.Operation = "unregistered_but_safe_looking_operation"
+	if !errors.Is(validate(event), ErrEvent) {
+		t.Fatal("operation outside fixed vocabulary accepted")
+	}
 	event = validEvent()
 	event.HumanActor = "bad\nactor"
 	if !errors.Is(validate(event), ErrEvent) {
 		t.Fatal("newline accepted")
+	}
+}
+
+func TestReservedRotationAndRecoveryVocabulary(t *testing.T) {
+	for _, operation := range []string{
+		OperationMasterKeyRotationStarted,
+		OperationMasterKeyRotationResumed,
+		OperationCredentialKeyRotated,
+		OperationMasterKeyRotationFinalized,
+		OperationRecoveryValidationStarted,
+		OperationRecoveryValidationFinished,
+	} {
+		event := validEvent()
+		event.Operation = operation
+		if err := validate(event); err != nil {
+			t.Fatalf("reserved operation %q rejected: %v", operation, err)
+		}
 	}
 }
 
