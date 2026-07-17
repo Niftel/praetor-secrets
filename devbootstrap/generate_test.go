@@ -18,7 +18,7 @@ func TestGenerateCreatesRestrictedInteroperableBootstrap(t *testing.T) {
 	auditURL := restrictedInput(t, root+"/audit-url", "postgres://audit:password@postgres:5432/audit?sslmode=disable")
 	output := root + "/generated"
 	now := time.Date(2026, 7, 15, 12, 0, 0, 0, time.UTC)
-	err := Generate(Config{OutputDirectory: output, Namespace: "security", TrustDomain: "praetor.local", SecretsDatabaseURLFile: secretsURL, AuditDatabaseURLFile: auditURL, Now: func() time.Time { return now }})
+	err := Generate(Config{OutputDirectory: output, Namespace: "security", TrustDomain: "praetor.local", SchedulerServiceName: "praetor-staging-scheduler", SecretsDatabaseURLFile: secretsURL, AuditDatabaseURLFile: auditURL, Now: func() time.Time { return now }})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -58,7 +58,7 @@ func TestGenerateCreatesRestrictedInteroperableBootstrap(t *testing.T) {
 		t.Fatalf("executor identity=%v", executorClient.URIs)
 	}
 	claimServer := readCertificate(t, filepath.Join(output, "clients/praetor-scheduler/claim.crt"))
-	if !slices.Contains(claimServer.DNSNames, "praetor-scheduler.security.svc") || !slices.Contains(claimServer.ExtKeyUsage, x509.ExtKeyUsageServerAuth) {
+	if !slices.Contains(claimServer.DNSNames, "praetor-staging-scheduler.security.svc") || !slices.Contains(claimServer.ExtKeyUsage, x509.ExtKeyUsageServerAuth) {
 		t.Fatalf("claim server DNS names=%v usages=%v", claimServer.DNSNames, claimServer.ExtKeyUsage)
 	}
 	workloadRoots := x509.NewCertPool()
@@ -67,7 +67,7 @@ func TestGenerateCreatesRestrictedInteroperableBootstrap(t *testing.T) {
 	if _, err := executorClient.Verify(x509.VerifyOptions{Roots: workloadRoots, KeyUsages: []x509.ExtKeyUsage{x509.ExtKeyUsageClientAuth}, CurrentTime: now}); err != nil {
 		t.Fatalf("executor chain: %v", err)
 	}
-	if _, err := claimServer.Verify(x509.VerifyOptions{Roots: workloadRoots, DNSName: "praetor-scheduler.security.svc", KeyUsages: []x509.ExtKeyUsage{x509.ExtKeyUsageServerAuth}, CurrentTime: now}); err != nil {
+	if _, err := claimServer.Verify(x509.VerifyOptions{Roots: workloadRoots, DNSName: "praetor-staging-scheduler.security.svc", KeyUsages: []x509.ExtKeyUsage{x509.ExtKeyUsageServerAuth}, CurrentTime: now}); err != nil {
 		t.Fatalf("claim server chain: %v", err)
 	}
 	sink := readCertificate(t, filepath.Join(output, "praetor-audit-server/tls.crt"))
