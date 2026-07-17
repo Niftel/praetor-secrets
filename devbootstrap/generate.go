@@ -23,6 +23,7 @@ type Config struct {
 	OutputDirectory        string
 	Namespace              string
 	TrustDomain            string
+	SchedulerServiceName   string
 	SecretsDatabaseURLFile string
 	AuditDatabaseURLFile   string
 	Now                    func() time.Time
@@ -32,8 +33,11 @@ func Generate(config Config) error {
 	if config.Now == nil {
 		config.Now = time.Now
 	}
+	if config.SchedulerServiceName == "" {
+		config.SchedulerServiceName = "praetor-scheduler"
+	}
 	if !validDNSName(config.Namespace) || !validDNSName(config.TrustDomain) || config.OutputDirectory == "" ||
-		config.SecretsDatabaseURLFile == "" || config.AuditDatabaseURLFile == "" {
+		!validDNSName(config.SchedulerServiceName) || config.SecretsDatabaseURLFile == "" || config.AuditDatabaseURLFile == "" {
 		return ErrInvalid
 	}
 	if _, err := os.Stat(config.OutputDirectory); !errors.Is(err, os.ErrNotExist) {
@@ -75,7 +79,7 @@ func Generate(config Config) error {
 	if err != nil {
 		return ErrInvalid
 	}
-	claimServer, claimServerKey, err := issueServer(workloadCA, "praetor-scheduler", config.Namespace, now)
+	claimServer, claimServerKey, err := issueServer(workloadCA, config.SchedulerServiceName, config.Namespace, now)
 	if err != nil {
 		return ErrInvalid
 	}
